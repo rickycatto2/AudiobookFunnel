@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field, model_validator
 ROOTS = {name: Path(os.getenv('AF_' + name.upper(), default)).resolve() for name, default in
          [('source', '/source'), ('work', '/work'), ('library', '/library'), ('torrents', '/torrents')]}
 DATA = Path(os.getenv('AF_DATA', './data/config'))
-SECRET_FIELDS = {'qbit_password', 'abs_token'}
+SECRET_FIELDS = {'qbit_password', 'abs_token', 'google_books_api_key'}
 
 
 class Settings(BaseModel):
@@ -32,6 +32,7 @@ class Settings(BaseModel):
     aac_bitrate: int = Field(96, ge=48, le=320)
     ffmpeg_threads: int = Field(2, ge=1, le=16)
     audible_region: str = 'com'
+    google_books_api_key: str = ''
     qbit_enabled: bool = False
     qbit_url: str = 'http://host.docker.internal:8080'
     qbit_username: str = ''

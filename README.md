@@ -58,6 +58,8 @@ Use the Settings templates to change it. Optional `year_prefix`, `year_suffix`, 
 
 **Audible reference:** The metadata behavior follows [the user's MP3Tag Audible-via-API source](https://github.com/binyaminyblatt/mp3tag-Audible-via-API): public catalog search/direct ASIN lookup and separate author, narrator, series, description and artwork fields. No upstream code is copied. The unofficial Audible API may restrict editions or change. Google Books and Open Library supply print-book metadata and never auto-approve an audiobook edition.
 
+Google Books can enforce an anonymous quota. If it reports a rate limit, use Open Library or add an optional Google Books API key in Settings. The key is stored and redacted like the other integration secrets.
+
 ## Confidence and scheduling
 
 Fixed evidence weights: title 35, author 25, narrator 10, runtime 15, series 5, series number 5, ASIN/ISBN 5. Missing evidence scores zero; identifier conflict blocks automation. Auto-approval also requires confirmed grouping, strong title/author agreement, runtime evidence, and the configured lead over the next result. Scores are evidence measures, not statistical probabilities. Default threshold 85, lead 12, automation off.
@@ -74,6 +76,8 @@ docker compose up -d
 ```
 
 Back up `data/config` with containers stopped, along with `.env` and your library. SQLite is the state authority. The worker holds an exclusive OS lock; do not scale it horizontally. On restart, interrupted processing returns to READY. A matching final manifest and SHA-256 checksum recover publication that finished just before a crash. Encodes restart from retained source copies; they do not resume halfway through audio. `funnel.json` retains metadata, provenance, source-relative names and output checksum.
+
+Publication paths are frozen when processing starts, so changing naming settings during recovery does not create a second copy. An error with a saved publication plan offers **Retry unchanged publication**. Editing a failed job clears that plan only when its own final output has not already been published.
 
 No automatic cleanup is enabled. Private job work folders and abandoned hidden `.funnel-*` library staging folders may remain after failures; remove them manually only after verifying successful outputs and stopping the worker. Source changes detected after inspection require a new import under a new source-package name in this initial release. Existing package paths are deliberately not rediscovered as new books.
 

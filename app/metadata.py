@@ -75,7 +75,7 @@ def audible_product(p):
                 duration=float(p.get('runtime_length_min') or 0) * 60, genre='; '.join(genres), cover_url=cover, provider='Audible')
 
 
-def search(provider, query, author='', region='com', asin=''):
+def search(provider, query, author='', region='com', asin='', google_key=''):
     with httpx.Client(timeout=25, follow_redirects=True) as client:
         if provider == 'Audible':
             params = {'response_groups': 'category_ladders,contributors,media,product_desc,product_extended_attrs,product_attrs,series,product_details', 'image_sizes': '500,1000,2400'}
@@ -89,7 +89,10 @@ def search(provider, query, author='', region='com', asin=''):
             response.raise_for_status()
             return [audible_product(p) for p in response.json().get('products', [])]
         if provider == 'Google Books':
-            response = client.get('https://www.googleapis.com/books/v1/volumes', params={'q': f'intitle:{query} inauthor:{author}' if author else query, 'maxResults': 8})
+            params = {'q': f'intitle:{query} inauthor:{author}' if author else query, 'maxResults': 8}
+            if google_key:
+                params['key'] = google_key
+            response = client.get('https://www.googleapis.com/books/v1/volumes', params=params)
             response.raise_for_status()
             result = []
             for item in response.json().get('items', []):

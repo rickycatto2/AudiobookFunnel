@@ -197,3 +197,11 @@ def test_window_and_ready_claim(configured, monkeypatch):
     state.update_job(job['id'], 'READY', body)
     assert worker.claim(configured)['id'] == job['id']
     assert worker.claim(configured) is None
+
+
+def test_publication_recovery_freezes_destination(configured, monkeypatch):
+    src, job = import_book(configured, monkeypatch)
+    destination = media.process(job, configured)
+    recovered = state.job(job['id'])
+    changed = configured.model_copy(update={'folder_template': '{title}/{author}', 'file_template': '{author} - {title}'})
+    assert media.process(recovered, changed) == destination

@@ -175,7 +175,17 @@ def process(job, settings):
     work = contained(Path(settings.work_path) / job_id, settings.work_path)
     work.mkdir(parents=True, exist_ok=True)
     relative, filename = names(meta, settings)
-    destination = contained(Path(settings.library_path) / relative, settings.library_path)
+    # Freeze the publication location before touching audio. A settings change after
+    # a crash must not publish the same job again under a different template.
+    from app import state
+    if not body.get('publication'):
+        body['publication'] = {'library_path': settings.library_path, 'relative': str(relative), 'filename': filename}
+        with state.db() as c:
+            c.execute('UPDATE jobs SET body=? WHERE id=?', (json.dumps(body), job_id))
+    plan = body['publication']
+    library = contained(plan['library_path'], state.ROOTS['library'])
+    filename = plan['filename']
+    destination = contained(library / plan['relative'], library)
     if destination.exists():
         manifest = destination / 'funnel.json'
         if manifest.is_file():
@@ -240,7 +250,7 @@ def process(job, settings):
         raise ValueError(f'Output duration differs: expected {offset:.1f}s, got {actual:.1f}s')
     run(['ffmpeg', '-v', 'error', '-xerror', '-i', str(output), '-map', '0:a:0', '-f', 'null', '-'])
     destination.parent.mkdir(parents=True, exist_ok=True)
-    partial = contained(Path(settings.library_path) / ('.funnel-' + job_id + '-' + uuid.uuid4().hex[:8]), settings.library_path)
+    partial = contained(library / ('.funnel-' + job_id + '-' + uuid.uuid4().hex[:8]), library)
     partial.mkdir()
     shutil.copy2(output, partial / filename)
     if digest(output) != digest(partial / filename):

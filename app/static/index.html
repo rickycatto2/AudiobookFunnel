@@ -1,5 +1,68 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AudiobookFunnel</title><link rel="stylesheet" href="/static/style.css"></head>
-<body><header><a class="brand" href="/">◒ <span>AudiobookFunnel<small>FROM DOWNLOAD TO LIBRARY</small></span></a><nav><button id="queue-nav">Queue</button><button id="settings-nav">Settings</button></nav><span id="worker-status" class="muted">Connecting…</span></header>
-<main><div id="notice" role="status" hidden></div><section id="queue"><div class="heading"><div><p class="eyebrow">YOUR AUDIOBOOK WORKSPACE</p><h1>A clear path to your library.</h1><p class="muted">Inspect the source. Find the right edition. Finish with confidence.</p></div><button class="primary" id="discover">Check completed downloads</button></div><div id="counts" class="counts"></div><div class="toolbar"><h2>Book queue</h2><select id="filter" aria-label="Filter queue"><option value="">All books</option><option>REVIEW</option><option>READY</option><option>PROCESSING</option><option>COMPLETE</option><option>ERROR</option></select><button id="refresh">Refresh</button></div><div id="packages"></div><div id="books"></div><div id="scans"></div></section>
-<section id="detail" hidden></section><section id="settings" hidden><p class="eyebrow">MAKE IT YOURS</p><h1>Settings</h1><p class="muted">Paths below refer to Docker mounts. Change Windows host folders in .env, then recreate the containers.</p><form id="settings-form"></form></section><section id="grouping" hidden></section></main><footer>Sources stay untouched. Your decisions stay recorded.</footer><script src="/static/app.js"></script></body></html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>AudiobookFunnel</title>
+    <link rel="stylesheet" href="/static/style.css" />
+  </head>
+  <body>
+    <header>
+      <a class="brand" href="/"
+        >◒
+        <span>AudiobookFunnel<small>FROM DOWNLOAD TO LIBRARY</small></span></a
+      >
+      <nav>
+        <button id="queue-nav">Queue</button
+        ><button id="settings-nav">Settings</button>
+      </nav>
+      <span id="worker-status" class="muted">Connecting…</span>
+    </header>
+    <main>
+      <div id="notice" role="status" hidden></div>
+      <section id="queue">
+        <div class="heading">
+          <div>
+            <p class="eyebrow">YOUR AUDIOBOOK WORKSPACE</p>
+            <h1>A clear path to your library.</h1>
+            <p class="muted">
+              Inspect the source. Find the right edition. Finish with
+              confidence.
+            </p>
+          </div>
+          <button class="primary" id="discover">
+            Check completed downloads
+          </button>
+        </div>
+        <div id="counts" class="counts"></div>
+        <div class="toolbar">
+          <h2>Book queue</h2>
+          <select id="filter" aria-label="Filter queue">
+            <option value="">All books</option>
+            <option>REVIEW</option>
+            <option>READY</option>
+            <option>PROCESSING</option>
+            <option>COMPLETE</option>
+            <option>ERROR</option></select
+          ><button id="refresh">Refresh</button>
+        </div>
+        <div id="packages"></div>
+        <div id="books"></div>
+        <div id="scans"></div>
+      </section>
+      <section id="detail" hidden></section>
+      <section id="settings" hidden>
+        <p class="eyebrow">MAKE IT YOURS</p>
+        <h1>Settings</h1>
+        <p class="muted">
+          Paths below refer to Docker mounts. Change Windows host folders in
+          .env, then recreate the containers.
+        </p>
+        <form id="settings-form"></form>
+      </section>
+      <section id="grouping" hidden></section>
+    </main>
+    <footer>Sources stay untouched. Your decisions stay recorded.</footer>
+    <script src="/static/app.js"></script>
+  </body>
+</html>

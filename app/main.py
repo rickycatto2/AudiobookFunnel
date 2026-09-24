@@ -5,10 +5,11 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import urlparse
 
+import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from app import media, metadata, state, worker
 
@@ -41,6 +42,11 @@ async def guard(request: Request, call_next):
 @app.exception_handler(ValueError)
 async def value_error(request, exc):
     return JSONResponse({'detail': str(exc)}, 400)
+
+
+@app.exception_handler(ValidationError)
+async def validation_error(request, exc):
+    return JSONResponse({'detail': '; '.join(e['msg'] for e in exc.errors(include_input=False))}, 400)
 
 
 @app.exception_handler(KeyError)
@@ -117,6 +123,17 @@ def edit_transaction(job_id, change):
         c.execute('BEGIN IMMEDIATE')
         job = state.unpack(c.execute('SELECT * FROM jobs WHERE id=?', (job_id,)).fetchone())
         editable(job)
+        # An existing published output must be recovered, not retagged in place.
+        plan = job['body'].get('publication')
+        manifest = Path(plan['library_path']) / plan['relative'] / 'funnel.json' if plan else None
+        if manifest and manifest.is_file():
+            try:
+                published = json.loads(manifest.read_text('utf-8')).get('job_id') == job_id
+            except (ValueError, OSError):
+                published = False
+            if published:
+                raise HTTPException(409, 'Output already published; retry recovery to restore its completed state')
+        job['body'].pop('publication', None)
         change(job['body'])
         c.execute("UPDATE jobs SET body=?,status='REVIEW',error=NULL,updated=? WHERE id=?", (json.dumps(job['body']), time.time(), job_id))
         state.event(c, job_id, 'Review updated')
@@ -156,7 +173,14 @@ def search(job_id: str, data: Search):
     job = state.job(job_id)
     editable(job)
     try:
-        candidates = metadata.ranked(job['body']['embedded'], metadata.search(data.provider, data.query, data.author, state.settings().audible_region, data.asin))
+        settings = state.settings()
+        candidates = metadata.ranked(job['body']['embedded'], metadata.search(data.provider, data.query, data.author, settings.audible_region, data.asin, settings.google_books_api_key))
+    except httpx.HTTPStatusError as exc:
+        status = exc.response.status_code
+        detail = 'Provider quota/rate limit reached. Try later or use another source.' if status == 429 else f'Provider returned HTTP {status}. Try another region/source or manual editing.'
+        if status == 429 and data.provider == 'Google Books':
+            detail += ' You can supply a Google Books API key in Settings.'
+        raise HTTPException(502, detail) from exc
     except ValueError:
         raise
     except Exception as exc:
@@ -218,6 +242,18 @@ def return_review(job_id: str, data: dict):
         if result.rowcount != 1:
             raise HTTPException(409, 'Only queued jobs can return to review')
     return {'saved': True}
+
+
+@app.post('/api/jobs/{job_id}/recover')
+def recover(job_id: str, data: dict):
+    with state.db() as c:
+        c.execute('BEGIN IMMEDIATE')
+        job = state.unpack(c.execute('SELECT * FROM jobs WHERE id=?', (job_id,)).fetchone())
+        if job['status'] != 'ERROR' or not job['body'].get('publication'):
+            raise HTTPException(409, 'Only interrupted publication errors can be recovered')
+        c.execute("UPDATE jobs SET status='READY',error=NULL,updated=? WHERE id=?", (time.time(), job_id))
+        state.event(c, job_id, 'Retrying unchanged publication')
+    return {'queued': True}
 
 
 class Group(BaseModel):
