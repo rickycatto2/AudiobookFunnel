@@ -1,0 +1,13 @@
+Metadata-Version: 2.4
+Name: audiobookfunnel
+Version: 0.1.0
+Summary: Conservative audiobook ingest and metadata review
+Requires-Python: >=3.12
+Requires-Dist: fastapi<1,>=0.115
+Requires-Dist: uvicorn<1,>=0.34
+Requires-Dist: httpx<1,>=0.28
+Requires-Dist: mutagen<2,>=1.47
+Requires-Dist: pillow<13,>=11
+Requires-Dist: tzdata>=2025.1
+Provides-Extra: test
+Requires-Dist: pytest<10,>=8; extra == "test"

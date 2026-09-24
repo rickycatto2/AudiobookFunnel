@@ -1,0 +1,33 @@
+name: audiobookfunnel
+x-common: &common
+  build: .
+  restart: unless-stopped
+  environment:
+    AF_DATA: /config
+    TZ: America/Chicago
+  volumes:
+    - type: bind
+      source: ${SOURCE_PATH:-./data/source}
+      target: /source
+      read_only: true
+    - type: bind
+      source: ${TORRENT_PATH:-./data/torrents}
+      target: /torrents
+      read_only: true
+    - ${WORK_PATH:-./data/work}:/work
+    - ${LIBRARY_PATH:-./data/library}:/library
+    - ./data/config:/config
+services:
+  web:
+    <<: *common
+    ports:
+      - "127.0.0.1:8095:8095"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8095/api/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+  worker:
+    <<: *common
+    command: ["python", "-m", "app.worker"]
+    stop_grace_period: 30s

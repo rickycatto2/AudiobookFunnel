@@ -1,0 +1,9 @@
+fastapi<1,>=0.115
+uvicorn<1,>=0.34
+httpx<1,>=0.28
+mutagen<2,>=1.47
+pillow<13,>=11
+tzdata>=2025.1
+
+[test]
+pytest<10,>=8
