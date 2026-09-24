@@ -62,18 +62,23 @@ def audible_product(p):
     names = lambda field: '; '.join(x.get('name', '') for x in p.get(field, []))
     series = (p.get('series') or [{}])[0]
     images = p.get('product_images') or {}
-    cover = images.get('1215') or images.get('500') or next(iter(images.values()), '')
+    cover = images.get('2400') or images.get('1000') or images.get('500') or next(iter(images.values()), '')
+    genres = []
+    for ladder in p.get('category_ladders', []):
+        for category in ladder.get('ladder', []):
+            if category.get('name') and category['name'] not in genres:
+                genres.append(category['name'])
     return dict(title=p.get('title', ''), author=names('authors'), narrator=names('narrators'),
                 year=(p.get('release_date') or '')[:4], series=series.get('title', ''), series_number=series.get('sequence', ''),
                 description=plain(p.get('publisher_summary')), publisher=p.get('publisher_name', ''),
                 copyright=plain(p.get('copyright')), asin=p.get('asin', ''), isbn=p.get('isbn', ''), language=p.get('language', ''),
-                duration=float(p.get('runtime_length_min') or 0) * 60, cover_url=cover, provider='Audible')
+                duration=float(p.get('runtime_length_min') or 0) * 60, genre='; '.join(genres), cover_url=cover, provider='Audible')
 
 
 def search(provider, query, author='', region='com', asin=''):
     with httpx.Client(timeout=25, follow_redirects=True) as client:
         if provider == 'Audible':
-            params = {'response_groups': 'contributors,media,product_desc,product_extended_attrs,product_attrs,series', 'image_sizes': '500,1215'}
+            params = {'response_groups': 'category_ladders,contributors,media,product_desc,product_extended_attrs,product_attrs,series,product_details', 'image_sizes': '500,1000,2400'}
             base = f'https://api.audible.{region}/1.0/catalog/products'
             if asin:
                 response = client.get(base + '/' + asin_from(asin), params=params)

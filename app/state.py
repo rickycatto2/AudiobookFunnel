@@ -46,7 +46,10 @@ class Settings(BaseModel):
 
     @model_validator(mode='after')
     def validate_settings(self):
-        ZoneInfo(self.timezone)
+        try:
+            ZoneInfo(self.timezone)
+        except Exception as exc:
+            raise ValueError('Unknown timezone; use a name such as America/Chicago') from exc
         if self.audible_region not in {'com', 'co.uk', 'com.au', 'ca', 'de', 'fr', 'it', 'es', 'co.jp', 'in'}:
             raise ValueError('Unsupported Audible region')
         paths = []
