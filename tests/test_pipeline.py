@@ -115,7 +115,8 @@ def test_confidence_and_asin(configured):
     source = {'title': 'Dune', 'author': 'Frank Herbert', 'duration': 72000, 'asin': 'B012345678'}
     candidate = dict(source, provider='Audible')
     result = metadata.score(source, candidate)
-    assert result['total'] == 80  # no narrator/series evidence
+    assert result['base_total'] == 80
+    assert result['total'] == 95  # exact title/author and runtime qualify despite missing optional fields
     assert metadata.score({'title': 'Dune'}, candidate)['total'] == 35
     assert metadata.score(source, dict(candidate, asin='B987654321'))['conflict']
     assert metadata.asin_from('https://www.audible.com/pd/Dune-Audiobook/B012345678?x=1') == 'B012345678'

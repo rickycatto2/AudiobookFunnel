@@ -95,6 +95,8 @@ def jobs():
 @app.get('/api/jobs/{job_id}')
 def get_job(job_id: str):
     obj = state.job(job_id)
+    obj['body']['candidates'] = metadata.ranked(obj['body']['embedded'], obj['body']['candidates'])
+    obj['automation'] = metadata.automation_decision(obj['body']['embedded'], obj['body']['candidates'], state.settings(), obj['body']['grouping_confirmed'])
     with state.db() as c:
         obj['events'] = [dict(r) for r in c.execute('SELECT * FROM events WHERE job_id=? ORDER BY id', (job_id,))]
     return obj
@@ -198,6 +200,7 @@ class Selection(BaseModel):
 @app.post('/api/jobs/{job_id}/select')
 def select(job_id: str, data: Selection):
     def change(body):
+        body['candidates'] = metadata.ranked(body['embedded'], body['candidates'])
         if data.index >= len(body['candidates']):
             raise ValueError('Candidate no longer exists; search again')
         candidate = body['candidates'][data.index]
@@ -208,6 +211,78 @@ def select(job_id: str, data: Selection):
         if candidate.get('cover_url'):
             body['cover_choice'] = 'provider'
     return edit_transaction(job_id, change)
+
+
+@app.post('/api/jobs/{job_id}/auto-match')
+def auto_match(job_id: str, data: dict):
+    settings = state.settings()
+    with state.db() as c:
+        c.execute('BEGIN IMMEDIATE')
+        job = state.unpack(c.execute('SELECT * FROM jobs WHERE id=?', (job_id,)).fetchone())
+        if job['status'] != 'REVIEW':
+            raise HTTPException(409, 'Only review jobs can be matched automatically')
+        body = job['body']
+        body['candidates'] = metadata.ranked(body['embedded'], body['candidates'])
+        decision = metadata.automation_decision(body['embedded'], body['candidates'], settings, body['grouping_confirmed'])
+        if not decision['eligible']:
+            raise HTTPException(409, '; '.join(decision['reasons']))
+        for file in body['files']:
+            source = media.contained(file['path'], settings.source_path)
+            if not source.is_file():
+                raise HTTPException(409, 'Source file is missing; restore it or dismiss the stale error')
+        # Preserve deliberate edits; this action fills untouched fields only.
+        best = body['candidates'][0]
+        for field in metadata.FIELDS:
+            if best.get(field) and body['provenance'].get(field) != 'Manual':
+                body['metadata'][field] = str(best[field])
+                body['provenance'][field] = best['provider']
+        if best.get('cover_url') and body.get('cover_choice') == 'embedded':
+            body['cover_choice'] = 'provider'
+        media.names(body['metadata'], settings)
+        body['force_now'] = False
+        c.execute("UPDATE jobs SET status='READY',body=?,error=NULL,updated=? WHERE id=?", (json.dumps(body), time.time(), job_id))
+        state.event(c, job_id, 'User requested automatic match recheck: approved with current scoring rules')
+    return {'queued': True}
+
+
+@app.post('/api/jobs/{job_id}/dismiss')
+def dismiss_job(job_id: str, data: dict):
+    with state.db() as c:
+        result = c.execute("UPDATE jobs SET status='DISMISSED',updated=? WHERE id=? AND status='ERROR'", (time.time(), job_id))
+        if result.rowcount != 1:
+            raise HTTPException(409, 'Only error jobs can be dismissed')
+        state.event(c, job_id, 'Error dismissed; files and original error retained')
+    return {'saved': True}
+
+
+@app.post('/api/jobs/{job_id}/restore')
+def restore_job(job_id: str, data: dict):
+    with state.db() as c:
+        result = c.execute("UPDATE jobs SET status='ERROR',updated=? WHERE id=? AND status='DISMISSED'", (time.time(), job_id))
+        if result.rowcount != 1:
+            raise HTTPException(409, 'Only dismissed jobs can be restored')
+        state.event(c, job_id, 'Dismissed error restored; no processing queued')
+    return {'saved': True}
+
+
+@app.post('/api/packages/{package_id}/dismiss')
+def dismiss_package(package_id: str, data: dict):
+    with state.db() as c:
+        result = c.execute("UPDATE packages SET status='DISMISSED' WHERE id=? AND status='ERROR'", (package_id,))
+        if result.rowcount != 1:
+            raise HTTPException(409, 'Only failed inspections can be dismissed')
+        state.event(c, None, 'Package error dismissed: ' + package_id)
+    return {'saved': True}
+
+
+@app.post('/api/packages/{package_id}/restore')
+def restore_package(package_id: str, data: dict):
+    with state.db() as c:
+        result = c.execute("UPDATE packages SET status='ERROR' WHERE id=? AND status='DISMISSED'", (package_id,))
+        if result.rowcount != 1:
+            raise HTTPException(409, 'Only dismissed packages can be restored')
+        state.event(c, None, 'Package error restored: ' + package_id)
+    return {'saved': True}
 
 
 @app.post('/api/jobs/{job_id}/embedded')

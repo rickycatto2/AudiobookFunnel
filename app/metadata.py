@@ -43,19 +43,55 @@ def score(source, candidate):
     conflict = any(str(source[k]).upper() != str(candidate[k]).upper() for k in identifiers)
     exact = bool(identifiers) and not conflict
     signals.append({'field': 'identifier', 'points': 5 if exact else 0, 'maximum': 5, 'reason': 'conflict: automation blocked' if conflict else 'exact' if exact else 'missing evidence'})
-    return {'total': round(sum(x['points'] for x in signals), 1), 'signals': signals, 'conflict': conflict}
+    conflicts = ['identifier'] if conflict else []
+    for field in ('narrator', 'series', 'series_number', 'language'):
+        if source.get(field) and candidate.get(field) and similarity(source[field], candidate[field]) < (1 if field == 'series_number' else .9):
+            conflicts.append(field)
+    base = round(sum(x['points'] for x in signals), 1)
+    strong = (candidate.get('provider') == 'Audible'
+              and similarity(source.get('title'), candidate.get('title')) == 1
+              and similarity(source.get('author'), candidate.get('author')) == 1
+              and a > 0 and b > 0 and abs(a - b) <= min(120, max(a, b) * .01)
+              and not conflicts)
+    bonus = round(max(0, 95 - base), 1) if strong else 0
+    if strong:
+        signals.append({'field': 'strong_match', 'points': bonus, 'maximum': bonus,
+                        'reason': 'Exact title + author; runtime within 1% and 120 seconds; no conflicting edition evidence. Score floor 95.'})
+    return {'total': round(base + bonus, 1), 'base_total': base, 'signals': signals,
+            'conflict': bool(conflicts), 'conflicts': conflicts, 'strong_match': strong}
 
 
 def may_automate(source, candidates, settings, grouping_confirmed):
-    if not settings.auto_approve or not grouping_confirmed or not candidates:
-        return False
-    best = candidates[0]
-    scoring = best['confidence']
-    return (best['provider'] == 'Audible' and not scoring['conflict'] and scoring['total'] >= settings.confidence_threshold
-            and scoring['total'] - (candidates[1]['confidence']['total'] if len(candidates) > 1 else 0) >= settings.confidence_margin
-            and similarity(source.get('title'), best.get('title')) >= .9
-            and similarity(source.get('author'), best.get('author')) >= .9
-            and bool(best.get('duration')))
+    return automation_decision(source, candidates, settings, grouping_confirmed)['eligible']
+
+
+def automation_decision(source, candidates, settings, grouping_confirmed):
+    reasons = []
+    candidates = ranked(source, candidates)
+    if not settings.auto_approve:
+        reasons.append('Automatic approval is disabled in Settings')
+    if not grouping_confirmed:
+        reasons.append('Confirm file grouping and order')
+    if not candidates:
+        reasons.append('No metadata candidates available')
+    else:
+        best = candidates[0]
+        scoring = best['confidence']
+        if best.get('provider') != 'Audible':
+            reasons.append('Fallback book metadata requires manual approval')
+        if scoring['conflict']:
+            reasons.append('Conflicting evidence: ' + ', '.join(scoring['conflicts']))
+        if scoring['total'] < settings.confidence_threshold:
+            reasons.append(f"Score {scoring['total']} is below threshold {settings.confidence_threshold}")
+        # Repeated responses for the same ASIN are not a second edition.
+        rivals = [c for c in candidates[1:] if not (best.get('asin') and c.get('asin') == best['asin'] and c.get('provider') == best.get('provider'))]
+        if rivals and scoring['total'] - rivals[0]['confidence']['total'] < settings.confidence_margin:
+            reasons.append('Competing edition is too close; choose the correct edition')
+        if similarity(source.get('title'), best.get('title')) < .9 or similarity(source.get('author'), best.get('author')) < .9:
+            reasons.append('Title and author need stronger agreement')
+        if not source.get('duration') or not best.get('duration'):
+            reasons.append('Source and provider runtimes are required')
+    return {'eligible': not reasons, 'reasons': reasons or ['Strong, unambiguous match; eligible for automatic approval']}
 
 
 def audible_product(p):

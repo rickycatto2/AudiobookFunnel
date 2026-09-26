@@ -106,7 +106,7 @@ function drawQueue() {
     )
     .join("");
   const filter = $("#filter").value;
-  const jobs = snapshot.jobs.filter((j) => !filter || j.status === filter);
+  const jobs = snapshot.jobs.filter((j) => (filter ? j.status === filter : j.status !== "DISMISSED"));
   $("#books").innerHTML = jobs.length
     ? jobs
         .map(
@@ -116,10 +116,10 @@ function drawQueue() {
         .join("")
     : `<div class="empty"><h2>${filter ? "No books in this state" : "Your next listen starts here"}</h2><p>Set your folders in Settings, then check completed downloads. Each source package becomes one or more book jobs for inspection and review.</p><button id="empty-settings">Open Settings</button></div>`;
   $("#packages").innerHTML = snapshot.packages
-    .filter((p) => p.status !== "INSPECTED")
+    .filter((p) => filter === "DISMISSED" ? p.status === "DISMISSED" : p.status !== "INSPECTED" && p.status !== "DISMISSED")
     .map(
       (p) =>
-        `<div class="${p.error ? "error" : "panel"}"><strong>${esc(p.status)}</strong> · ${esc(p.source)}${p.error ? `<p>${esc(p.error)}</p><button data-package-retry="${p.id}">Retry inspection</button>` : ""}</div>`,
+        `<div class="${p.error ? "error" : "panel"}"><strong>${esc(p.status)}</strong> · ${esc(p.source)}${p.error ? `<p>${esc(p.error)}</p>${p.status === "DISMISSED" ? `<button data-package-action="restore" data-package-id="${p.id}">Restore error</button>` : `<button data-package-retry="${p.id}">Retry inspection</button><button data-package-action="dismiss" data-package-id="${p.id}">Dismiss error</button>`}` : ""}</div>`,
     )
     .join("");
   $("#scans").innerHTML = snapshot.scans.length
@@ -136,6 +136,13 @@ function drawQueue() {
           await queue();
         })),
   );
+  document.querySelectorAll("[data-package-action]").forEach(button => {
+    button.onclick = () => act(async () => {
+      await api(`/packages/${button.dataset.packageId}/${button.dataset.packageAction}`, "POST", {});
+      notice("Queue updated. No files changed.");
+      await queue();
+    });
+  });
   if ($("#empty-settings"))
     $("#empty-settings").onclick = () => act(showSettings);
 }
@@ -148,6 +155,25 @@ async function detail(id) {
   screen("detail");
   $("#detail").innerHTML =
     `<button id="back">← Book queue</button><div class="heading"><div><p class="eyebrow">BOOK REVIEW</p><h1>${esc(m.title)}</h1><span class="badge ${j.status}">${j.status}</span></div><button id="group" ${editable ? "" : "disabled"}>Review package grouping</button></div>${j.error ? `<div class="error">${esc(j.error)}</div>` : ""}${b.lookup_error ? `<div class="warning">${esc(b.lookup_error)}</div>` : ""}${j.status === "ERROR" && b.publication ? '<button id="recover">Retry unchanged publication</button>' : ""}${j.output ? `<p class="preview">Published to ${esc(j.output)}</p>` : ""}<div class="split"><div><div class="panel"><h2>Source audio</h2><p>${duration(b.embedded.duration)} · ${mediaMode(b.files)}</p>${b.files.map((f, i) => `<div class="file"><strong>${i + 1}.</strong> ${esc(f.relative)}<br><span class="muted">${duration(f.duration)} · ${esc(f.codec)}</span>${f.warning ? `<div class="warning">${esc(f.warning)}</div>` : ""}</div>`).join("")}<p><label><input id="group-confirm" type="checkbox" ${b.grouping_confirmed ? "checked" : ""} ${editable ? "" : "disabled"}>These files are one book, in the correct order</label></p></div><div class="panel"><h2>Find the right edition</h2><label>Metadata source<select id="provider"><option>Audible</option><option>Google Books</option><option>Open Library</option></select></label><label>Title<input id="query" value="${esc(m.title)}"></label><label>Author<input id="search-author" value="${esc(m.author)}"></label><label>ASIN or Audible URL (optional)<input id="asin" placeholder="B0… or https://www.audible.com/pd/…"></label><div class="actions"><button id="search" ${editable ? "" : "disabled"}>Search</button><button id="embedded" ${editable ? "" : "disabled"}>Use existing metadata</button></div><div id="candidates">${b.candidates.map((c, i) => `<div class="candidate">${image(c.cover_url)}<h3>${esc(c.title)}</h3><p>${esc(c.author)}<br><small>${esc(c.narrator || "Narrator unavailable")} · ${c.duration ? duration(c.duration) : "Print-book metadata"}</small></p><strong>${c.confidence.total}% evidence score</strong><details><summary>Why this score?</summary><div class="signals">${c.confidence.signals.map((s) => `${esc(label(s.field))}: ${s.points}/${s.maximum} — ${esc(s.reason)}`).join("<br>")}</div></details><button data-candidate="${i}" ${editable ? "" : "disabled"}>Use this metadata</button></div>`).join("") || '<p class="muted">Search for candidates, paste an ASIN, or enter metadata yourself.</p>'}</div></div></div><div><div class="panel"><h2>Final metadata</h2><form id="metadata-form"><div class="field-grid">${fields.map((f) => `<label class="${["description", "cover_url"].includes(f) ? "wide" : ""}">${esc(label(f))}${f === "description" ? `<textarea name="${f}" ${editable ? "" : "disabled"}>${esc(m[f])}</textarea>` : `<input name="${f}" value="${esc(m[f])}" ${editable ? "" : "disabled"}>`}<small>${esc(b.provenance[f] || "Not set")}</small></label>`).join("")}</div><h3>Cover selection</h3><div class="cover-choice"><label>${b.files[0].cover ? `<img src="/api/jobs/${j.id}/embedded-cover" alt="Embedded artwork">` : ""}<input type="radio" name="cover" value="embedded" ${b.cover_choice === "embedded" ? "checked" : ""}>Embedded artwork</label><label>${image(m.cover_url)}<input type="radio" name="cover" value="provider" ${b.cover_choice === "provider" ? "checked" : ""}>Metadata cover</label><label><input type="radio" name="cover" value="none" ${b.cover_choice === "none" ? "checked" : ""}>No cover</label>${b.covers.map((p, i) => `<label><img src="/api/jobs/${j.id}/cover/${i}" alt="Local cover ${i + 1}"><input type="radio" name="cover" value="local:${i}" ${b.cover_choice === `local:${i}` ? "checked" : ""}>Local ${i + 1}</label>`).join("")}</div><div class="actions"><button type="button" id="preview">Preview final name</button><button type="submit" ${editable ? "" : "disabled"}>Save edits</button></div><p id="name-preview" class="preview" hidden></p></form><div class="actions">${editable ? '<button class="primary" id="approve">Save & approve</button><button id="now">Process now</button>' : j.status === "READY" ? '<button id="unqueue">Return to review</button>' : ""}</div><small>Approve follows the processing window. Process now overrides it for this book.</small></div><details class="panel"><summary>Activity history</summary>${j.events.map((e) => `<p><small>${new Date(e.created * 1000).toLocaleString()}</small><br>${esc(e.message)}</p>`).join("")}</details></div></div>`;
+  const actions = document.createElement("div");
+  actions.className = "panel";
+  if (j.status === "REVIEW") {
+    actions.innerHTML = `<h3>Automatic match check</h3><p>${j.automation.reasons.map(esc).join("<br>")}</p><button id="auto-match" ${j.automation.eligible ? "" : "disabled"}>Auto-match & queue</button><p class="muted">Uses the best unambiguous match and follows your processing schedule. Confirm grouping and save edits first.</p>`;
+  } else if (["ERROR", "DISMISSED"].includes(j.status)) {
+    actions.innerHTML = `<button id="dismiss-error">${j.status === "ERROR" ? "Dismiss error" : "Restore error"}</button><p class="muted">Hides the stale error from the active queue. No files are deleted. Dismissed errors can be restored from the queue filter.</p>`;
+  }
+  $("#detail").insertBefore(actions, $("#detail .split"));
+  if ($("#auto-match")) $("#auto-match").onclick = () => act(async () => {
+    await save();
+    await api(`/jobs/${id}/auto-match`, "POST", {});
+    notice("Strong match queued for processing");
+    await queue();
+  });
+  if ($("#dismiss-error")) $("#dismiss-error").onclick = () => act(async () => {
+    await api(`/jobs/${id}/${j.status === "ERROR" ? "dismiss" : "restore"}`, "POST", {});
+    notice("Queue updated. No files changed.");
+    await queue();
+  });
   if ($("#recover"))
     $("#recover").onclick = () =>
       act(async () => {
@@ -318,7 +344,7 @@ const settingGroups = [
   ],
   [
     "Metadata & confidence",
-    "Automation is conservative and off by default. Missing evidence earns zero points.",
+    "Exact title and author with a very close runtime can qualify without optional tags. Conflicts and competing editions still require review.",
     [
       "auto_approve",
       "confidence_threshold",

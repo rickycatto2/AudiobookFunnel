@@ -62,7 +62,15 @@ Google Books can enforce an anonymous quota. If it reports a rate limit, use Ope
 
 ## Confidence and scheduling
 
-Fixed evidence weights: title 35, author 25, narrator 10, runtime 15, series 5, series number 5, ASIN/ISBN 5. Missing evidence scores zero; identifier conflict blocks automation. Auto-approval also requires confirmed grouping, strong title/author agreement, runtime evidence, and the configured lead over the next result. Scores are evidence measures, not statistical probabilities. Default threshold 85, lead 12, automation off.
+Base evidence weights: title 35, author 25, narrator 10, runtime 15, series 5, series number 5, ASIN/ISBN 5. Missing optional evidence earns no base points, but an Audible candidate with exact normalized title and author and runtime within both 1% and 120 seconds receives a **95-point score floor** when no edition evidence conflicts. The breakdown shows the base evidence and strong-match adjustment explicitly. This lets standalone books pass without series, narrator or identifier tags. Scores are rule-based evidence measures, not statistical probabilities.
+
+Conflicting identifiers, narrator, series/position or language block automation. Confirmed grouping, enabled auto-approval, the configured threshold, and the configured lead over a competing edition still apply. Duplicate results for the same Audible ASIN do not count as competing editions. Default threshold 85, lead 12; defaults leave automation off. Your saved settings are retained across upgrades.
+
+Existing REVIEW jobs display freshly calculated scores when opened. **Auto-match & queue** applies the current rules to stored candidates and queues an eligible job, preserving manual field edits and following the processing window. Save grouping/edits first. If blocked, the panel explains why. No existing review jobs are silently approved during an upgrade.
+
+## Clear stale errors
+
+If an older script moved a source away, open the failed job and click **Dismiss error**. Failed package inspections also have this button. The error disappears from the active queue but retains its original error and audit history; no source, working, or library files are deleted. Choose **Dismissed errors** in the queue filter and click **Restore error** to bring it back. Restoring does not start processing. Discovery remembers dismissed packages so they are not repeatedly imported.
 
 Heavy encodes start 01:00–07:00 America/Chicago by default. Equal start/end means all day. Running work finishes after the window closes. AAC remux/tagging can run anytime. One worker processes one book at a time with a configurable FFmpeg thread limit.
 
