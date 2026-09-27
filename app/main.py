@@ -95,8 +95,9 @@ def jobs():
 @app.get('/api/jobs/{job_id}')
 def get_job(job_id: str):
     obj = state.job(job_id)
-    obj['body']['candidates'] = metadata.ranked(obj['body']['embedded'], obj['body']['candidates'])
-    obj['automation'] = metadata.automation_decision(obj['body']['embedded'], obj['body']['candidates'], state.settings(), obj['body']['grouping_confirmed'])
+    evidence = metadata.with_files(obj['body']['embedded'], obj['body']['files'])
+    obj['body']['candidates'] = metadata.ranked(evidence, obj['body']['candidates'])
+    obj['automation'] = metadata.automation_decision(evidence, obj['body']['candidates'], state.settings(), obj['body']['grouping_confirmed'])
     with state.db() as c:
         obj['events'] = [dict(r) for r in c.execute('SELECT * FROM events WHERE job_id=? ORDER BY id', (job_id,))]
     return obj
@@ -176,7 +177,7 @@ def search(job_id: str, data: Search):
     editable(job)
     try:
         settings = state.settings()
-        candidates = metadata.ranked(job['body']['embedded'], metadata.search(data.provider, data.query, data.author, settings.audible_region, data.asin, settings.google_books_api_key))
+        candidates = metadata.ranked(metadata.with_files(job['body']['embedded'], job['body']['files']), metadata.search(data.provider, data.query, data.author, settings.audible_region, data.asin, settings.google_books_api_key))
     except httpx.HTTPStatusError as exc:
         status = exc.response.status_code
         detail = 'Provider quota/rate limit reached. Try later or use another source.' if status == 429 else f'Provider returned HTTP {status}. Try another region/source or manual editing.'
@@ -200,7 +201,7 @@ class Selection(BaseModel):
 @app.post('/api/jobs/{job_id}/select')
 def select(job_id: str, data: Selection):
     def change(body):
-        body['candidates'] = metadata.ranked(body['embedded'], body['candidates'])
+        body['candidates'] = metadata.ranked(metadata.with_files(body['embedded'], body['files']), body['candidates'])
         if data.index >= len(body['candidates']):
             raise ValueError('Candidate no longer exists; search again')
         candidate = body['candidates'][data.index]
@@ -222,8 +223,9 @@ def auto_match(job_id: str, data: dict):
         if job['status'] != 'REVIEW':
             raise HTTPException(409, 'Only review jobs can be matched automatically')
         body = job['body']
-        body['candidates'] = metadata.ranked(body['embedded'], body['candidates'])
-        decision = metadata.automation_decision(body['embedded'], body['candidates'], settings, body['grouping_confirmed'])
+        evidence = metadata.with_files(body['embedded'], body['files'])
+        body['candidates'] = metadata.ranked(evidence, body['candidates'])
+        decision = metadata.automation_decision(evidence, body['candidates'], settings, body['grouping_confirmed'])
         if not decision['eligible']:
             raise HTTPException(409, '; '.join(decision['reasons']))
         for file in body['files']:

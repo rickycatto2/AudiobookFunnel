@@ -43,8 +43,10 @@ def inspect_pending(settings):
             source = Path(package['source'])
             title = album or (Path(folder).name if folder != '.' else source.stem)
             meta = media.embedded(members, title)
+            evidence = metadata.with_files(meta, members)
+            search_title, search_author = metadata.search_terms(evidence)
             try:
-                candidates = metadata.ranked(meta, metadata.search('Audible', meta['title'], meta['author'], settings.audible_region))
+                candidates = metadata.ranked(evidence, metadata.search('Audible', search_title, search_author, settings.audible_region))
                 lookup_error = ''
             except Exception as exc:
                 candidates, lookup_error = [], f'Metadata lookup unavailable ({type(exc).__name__}); retry search or edit manually.'
@@ -57,7 +59,7 @@ def inspect_pending(settings):
             body = dict(files=members, embedded=meta.copy(), metadata=meta, provenance={k: 'Embedded / filename' for k, v in meta.items() if v}, candidates=candidates,
                         grouping_confirmed=confirmed, cover_choice='embedded', covers=sorted(set(covers)), lookup_error=lookup_error, force_now=False)
             status = 'REVIEW'
-            if metadata.may_automate(meta, candidates, settings, confirmed):
+            if metadata.may_automate(evidence, candidates, settings, confirmed):
                 selected = candidates[0]
                 for key in metadata.FIELDS:
                     if selected.get(key):

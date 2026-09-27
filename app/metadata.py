@@ -30,12 +30,66 @@ def similarity(a, b):
     return SequenceMatcher(None, norm(a), norm(b)).ratio() if a and b else 0
 
 
+def with_files(source, files):
+    """Separate filename evidence from editable metadata; never infer a book from one track."""
+    return dict(source, _filenames=[files[0].get('relative') or files[0]['path']] if len(files) == 1 else [])
+
+
+def generic_title(value):
+    return not value or bool(re.fullmatch(r'.+\bseries|(?:track|chapter|part|disc|cd)\s*\d+|unknown|untitled', str(value).strip(), re.I))
+
+
+def filename_pairs(source, author):
+    if not author:
+        return []
+    pairs = []
+    for filename in source.get('_filenames', []):
+        name = filename.replace('\\', '/').rsplit('/', 1)[-1]
+        stem = re.sub(r'\.(mp3|m4[ab]|flac|ogg|opus|wav|aac|mp4)$', '', name, flags=re.I)
+        parts = re.split(r'\s+[-–—]\s+', stem)
+        for i in range(1, len(parts)):
+            left, right = ' - '.join(parts[:i]), ' - '.join(parts[i:])
+            if similarity(right, author) == 1 and not generic_title(left):
+                pairs.append((left, right, name))
+            if similarity(left, author) == 1 and not generic_title(right):
+                pairs.append((right, left, name))
+    return pairs
+
+
+def search_terms(source):
+    pairs = filename_pairs(source, source.get('author'))
+    titles = {title for title, _, _ in pairs}
+    title = next(iter(titles)) if len(titles) == 1 and generic_title(source.get('title')) else source.get('title', '')
+    return title, source.get('author', '')
+
+
+def effective_evidence(source, candidate):
+    effective = source.copy()
+    notes, conflicts = {}, []
+    pairs = filename_pairs(source, candidate.get('author'))
+    matches = [(title, author, name) for title, author, name in pairs if similarity(title, candidate.get('title')) == 1]
+    if matches:
+        title, author, name = matches[0]
+        for field, value in [('title', title), ('author', author)]:
+            original = source.get(field)
+            if original and similarity(original, value) < .9 and not (field == 'title' and generic_title(original)):
+                conflicts.append(f'filename vs embedded {field}')
+            effective[field] = value
+            notes[field] = f'100% filename match: {name}'
+            if original and similarity(original, value) != 1:
+                notes[field] += f'; embedded {field}: {original}'
+    elif pairs and not any(similarity(title, candidate.get('title')) >= .9 for title, _, _ in pairs):
+        conflicts.append('filename title differs from candidate')
+    return effective, notes, conflicts
+
+
 def score(source, candidate):
+    source, filename_notes, filename_conflicts = effective_evidence(source, candidate)
     signals = []
     for field, weight in [('title', 35), ('author', 25), ('narrator', 10), ('series', 5), ('series_number', 5)]:
         ratio = similarity(source.get(field), candidate.get(field))
         signals.append({'field': field, 'points': round(weight * ratio, 1), 'maximum': weight,
-                        'reason': 'missing evidence' if not source.get(field) or not candidate.get(field) else f'{ratio:.0%} similarity'})
+                        'reason': filename_notes.get(field) or ('missing evidence' if not source.get(field) or not candidate.get(field) else f'{ratio:.0%} similarity')})
     a, b = source.get('duration', 0), candidate.get('duration', 0)
     ratio = max(0, 1 - abs(a - b) / max(a, b) / .15) if a and b else 0
     signals.append({'field': 'duration', 'points': round(15 * ratio, 1), 'maximum': 15, 'reason': f'{a:.0f}s source / {b:.0f}s provider' if a and b else 'missing evidence'})
@@ -43,7 +97,7 @@ def score(source, candidate):
     conflict = any(str(source[k]).upper() != str(candidate[k]).upper() for k in identifiers)
     exact = bool(identifiers) and not conflict
     signals.append({'field': 'identifier', 'points': 5 if exact else 0, 'maximum': 5, 'reason': 'conflict: automation blocked' if conflict else 'exact' if exact else 'missing evidence'})
-    conflicts = ['identifier'] if conflict else []
+    conflicts = (['identifier'] if conflict else []) + filename_conflicts
     for field in ('narrator', 'series', 'series_number', 'language'):
         if source.get(field) and candidate.get(field) and similarity(source[field], candidate[field]) < (1 if field == 'series_number' else .9):
             conflicts.append(field)
@@ -87,7 +141,8 @@ def automation_decision(source, candidates, settings, grouping_confirmed):
         rivals = [c for c in candidates[1:] if not (best.get('asin') and c.get('asin') == best['asin'] and c.get('provider') == best.get('provider'))]
         if rivals and scoring['total'] - rivals[0]['confidence']['total'] < settings.confidence_margin:
             reasons.append('Competing edition is too close; choose the correct edition')
-        if similarity(source.get('title'), best.get('title')) < .9 or similarity(source.get('author'), best.get('author')) < .9:
+        effective, _, _ = effective_evidence(source, best)
+        if similarity(effective.get('title'), best.get('title')) < .9 or similarity(effective.get('author'), best.get('author')) < .9:
             reasons.append('Title and author need stronger agreement')
         if not source.get('duration') or not best.get('duration'):
             reasons.append('Source and provider runtimes are required')
