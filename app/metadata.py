@@ -39,13 +39,18 @@ def generic_title(value):
     return not value or bool(re.fullmatch(r'.+\bseries|(?:track|chapter|part|disc|cd)\s*\d+|unknown|untitled', str(value).strip(), re.I))
 
 
+def filename_stem(filename):
+    name = filename.replace('\\', '/').rsplit('/', 1)[-1]
+    return re.sub(r'\.(mp3|m4[ab]|flac|ogg|opus|wav|aac|mp4)$', '', name, flags=re.I)
+
+
 def filename_pairs(source, author):
     if not author:
         return []
     pairs = []
     for filename in source.get('_filenames', []):
         name = filename.replace('\\', '/').rsplit('/', 1)[-1]
-        stem = re.sub(r'\.(mp3|m4[ab]|flac|ogg|opus|wav|aac|mp4)$', '', name, flags=re.I)
+        stem = filename_stem(name)
         parts = re.split(r'\s+[-–—]\s+', stem)
         for i in range(1, len(parts)):
             left, right = ' - '.join(parts[:i]), ' - '.join(parts[i:])
@@ -59,7 +64,8 @@ def filename_pairs(source, author):
 def search_terms(source):
     pairs = filename_pairs(source, source.get('author'))
     titles = {title for title, _, _ in pairs}
-    title = next(iter(titles)) if len(titles) == 1 and generic_title(source.get('title')) else source.get('title', '')
+    fallback = any(similarity(source.get('title'), filename_stem(name)) == 1 for _, _, name in pairs)
+    title = next(iter(titles)) if len(titles) == 1 and (generic_title(source.get('title')) or fallback) else source.get('title', '')
     return title, source.get('author', '')
 
 
@@ -72,7 +78,8 @@ def effective_evidence(source, candidate):
         title, author, name = matches[0]
         for field, value in [('title', title), ('author', author)]:
             original = source.get(field)
-            if original and similarity(original, value) < .9 and not (field == 'title' and generic_title(original)):
+            fallback = field == 'title' and (generic_title(original) or similarity(original, filename_stem(name)) == 1)
+            if original and similarity(original, value) < .9 and not fallback:
                 conflicts.append(f'filename vs embedded {field}')
             effective[field] = value
             notes[field] = f'100% filename match: {name}'

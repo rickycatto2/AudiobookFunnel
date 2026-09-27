@@ -38,6 +38,12 @@ def test_filename_author_conflict_and_no_substring_bonus():
     assert not metadata.score(source, candidate)['strong_match']
 
 
+def test_full_filename_fallback_is_not_a_conflicting_book_title():
+    source, candidate = example(title="Devil's Slide - Stacy Lynn Miller")
+    assert metadata.score(source, candidate)['strong_match']
+    assert metadata.search_terms(source)[0] == "Devil's Slide"
+
+
 def test_multifile_tracks_do_not_supply_book_identity():
     source, candidate = example()
     source = metadata.with_files(source, [{'relative': "Devil's Slide - Stacy Lynn Miller.mp3"}, {'relative': 'Other Book.mp3'}])
