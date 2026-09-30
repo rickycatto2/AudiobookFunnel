@@ -169,6 +169,10 @@ def escape_ffmetadata(value):
     return str(value).replace('\\', '\\\\').replace('=', '\\=').replace(';', '\\;').replace('#', '\\#').replace('\n', ' ')
 
 
+class DestinationExists(ValueError):
+    """A naming collision, not proof that the audio is identical."""
+
+
 def process(job, settings):
     body, job_id = job['body'], job['id']
     files, meta = body['files'], body['metadata']
@@ -193,7 +197,7 @@ def process(job, settings):
             existing = destination / filename
             if saved.get('job_id') == job_id and existing.is_file() and saved.get('sha256') == digest(existing):
                 return str(destination)
-        raise ValueError('Destination already exists; nothing overwritten. Change naming or resolve the duplicate.')
+        raise DestinationExists('Destination already exists; nothing overwritten. This may be a duplicate or a naming collision. Review metadata/naming to keep a different edition.')
     sources = []
     for i, f in enumerate(files):
         src = contained(f['path'], settings.source_path)
@@ -266,6 +270,6 @@ def process(job, settings):
     (partial / 'funnel.json').write_text(json.dumps({'job_id': job_id, 'metadata': meta, 'provenance': body['provenance'], 'files': [f['relative'] for f in files], 'sha256': digest(output), 'audio_mode': 'copy' if direct else 'AAC encode'}, indent=2), encoding='utf-8')
     # One worker owns publication. Never use replace(), which can overwrite destinations.
     if destination.exists():
-        raise ValueError('Destination appeared while processing; nothing overwritten')
+        raise DestinationExists('Destination appeared while processing; nothing overwritten')
     os.rename(partial, destination)
     return str(destination)

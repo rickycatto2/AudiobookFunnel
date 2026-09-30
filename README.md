@@ -78,6 +78,8 @@ Heavy encodes start 01:00–07:00 America/Chicago by default. Equal start/end me
 
 ## Operations and recovery
 
+Books whose final destination already exists now stop with **Already exists**, separately from processing errors. Existing collision errors are reclassified on startup. This means the folder is occupied; it does not prove the two recordings are identical, and it does not find duplicates stored under different names. Both copies are retained. Use the **Already exists** queue filter, then **Review metadata / naming** if the book is a different edition you want to keep. Save corrected metadata or naming before approving again. No library scan is requested for a skipped collision.
+
 ```powershell
 docker compose logs --tail 100 worker
 docker compose ps

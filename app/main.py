@@ -257,6 +257,16 @@ def dismiss_job(job_id: str, data: dict):
     return {'saved': True}
 
 
+@app.post('/api/jobs/{job_id}/review-existing')
+def review_existing(job_id: str, data: dict):
+    with state.db() as c:
+        result = c.execute("UPDATE jobs SET status='REVIEW',error=NULL,updated=? WHERE id=? AND status='ALREADY_EXISTS'", (time.time(), job_id))
+        if result.rowcount != 1:
+            raise HTTPException(409, 'Only Already exists jobs can use this action')
+        state.event(c, job_id, 'Returned existing-library collision to review; check metadata and final naming before approving')
+    return {'saved': True}
+
+
 @app.post('/api/jobs/{job_id}/restore')
 def restore_job(job_id: str, data: dict):
     with state.db() as c:

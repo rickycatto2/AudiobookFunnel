@@ -108,3 +108,18 @@ def test_package_error_dismiss_restore(configured):
         with state.db() as c:
             assert c.execute('SELECT status FROM packages WHERE id=?', (package,)).fetchone()[0] == 'DISMISSED'
         assert client.post(f'/api/packages/{package}/restore', json={}).status_code == 200
+
+
+def test_existing_collision_migration_is_specific_and_idempotent(configured):
+    _, job, path = seed(configured)
+    state.init()
+    assert state.job(job)['status'] == 'ERROR'  # missing sources remain errors
+    state.update_job(job, 'ERROR', error='Destination already exists; nothing overwritten. Change naming or resolve the duplicate.')
+    state.init()
+    assert state.job(job)['status'] == 'ALREADY_EXISTS'
+    with state.db() as c:
+        count = c.execute('SELECT count(*) FROM events').fetchone()[0]
+    state.init()
+    with state.db() as c:
+        assert c.execute('SELECT count(*) FROM events').fetchone()[0] == count
+    assert path.read_bytes() == b'source stays untouched'

@@ -98,6 +98,29 @@ def test_source_change_and_collision(configured, monkeypatch):
     assert (destination / 'keep.txt').read_text() == 'keep'
 
 
+def test_collision_is_separate_status_and_can_return_to_review(configured, monkeypatch):
+    src, job = import_book(configured, monkeypatch)
+    original = media.digest(src)
+    relative, _ = media.names(job['body']['metadata'], configured)
+    destination = Path(configured.library_path) / relative
+    destination.mkdir(parents=True)
+    (destination / 'keep.txt').write_text('keep')
+    state.update_job(job['id'], 'READY')
+    assert worker.finalize_one(configured)
+    assert state.job(job['id'])['status'] == 'ALREADY_EXISTS'
+    assert worker.claim(configured) is None
+    assert media.digest(src) == original
+    assert (destination / 'keep.txt').read_text() == 'keep'
+    with state.db() as c:
+        assert c.execute('SELECT count(*) FROM scan_requests').fetchone()[0] == 0
+    with TestClient(app) as client:
+        assert client.post(f"/api/jobs/{job['id']}/review-existing", json={}).status_code == 200
+        assert state.job(job['id'])['status'] == 'REVIEW'
+        assert client.put(f"/api/jobs/{job['id']}", json={'metadata': {'title': 'Different Edition'}}).status_code == 200
+        assert 'publication' not in state.job(job['id'])['body']
+        assert client.post(f"/api/jobs/{job['id']}/review-existing", json={}).status_code == 409
+
+
 def test_settings_secrets_and_paths(configured):
     with TestClient(app) as client:
         assert client.put('/api/settings', json={'qbit_password': 'secret'}).status_code == 200

@@ -106,6 +106,13 @@ def init():
         CREATE TABLE IF NOT EXISTS runtime (key TEXT PRIMARY KEY, value TEXT NOT NULL);
         ''')
         c.execute('INSERT OR IGNORE INTO settings VALUES (1, ?)', (Settings().model_dump_json(),))
+        # Reclassify only the two exact messages emitted by older releases.
+        for row in c.execute("SELECT id FROM jobs WHERE status='ERROR' AND error IN (?, ?)", (
+            'Destination already exists; nothing overwritten. Change naming or resolve the duplicate.',
+            'Destination appeared while processing; nothing overwritten',
+        )).fetchall():
+            c.execute("UPDATE jobs SET status='ALREADY_EXISTS',updated=? WHERE id=?", (time.time(), row['id']))
+            event(c, row['id'], 'Reclassified library collision as Already exists; no files changed')
 
 
 def settings():

@@ -108,6 +108,8 @@ def finalize_one(settings):
             if settings.abs_enabled:
                 if not c.execute("SELECT id FROM scan_requests WHERE status='PENDING'").fetchone():
                     c.execute("INSERT INTO scan_requests(status,updated) VALUES ('PENDING',?)", (time.time(),))
+    except media.DestinationExists as exc:
+        state.update_job(job['id'], 'ALREADY_EXISTS', error=str(exc), message='Library destination already exists; source retained for review')
     except Exception as exc:
         state.update_job(job['id'], 'ERROR', error=str(exc), message='Processing failed; source and working copies retained')
     return True
