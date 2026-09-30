@@ -28,7 +28,7 @@ docker compose up -d --force-recreate
 | `D:/Audiobooks` | `/library` |
 | Project `data/config` | `/config` (SQLite + settings) |
 
-Settings can select subdirectories within these mounts. Host folders are controlled by Docker, so changing a Windows host path requires `.env` and container recreation. Do not point source at incomplete downloads. qBittorrent must finish and move downloads into `raw` before discovery. No source files are renamed, modified, or deleted. Work and final library paths must never overlap source paths.
+Settings can select subdirectories within these mounts. Host folders are controlled by Docker, so changing a Windows host path requires `.env` and container recreation. Do not point source at incomplete downloads. qBittorrent must finish and move downloads into `raw` before discovery. Funnel never writes to source files directly. Optional completed-download archiving asks qBittorrent to move originals only after seeding and processing are finished. Work and final library paths must never overlap source paths.
 
 ## Review a book
 
@@ -48,7 +48,7 @@ Author/Series/Year - Title [Series 1]/Title (Year) [Series 1] - Author.m4b
 Author/Year - Title/Title (Year) - Author.m4b
 ```
 
-Use the Settings templates to change it. Optional `year_prefix`, `year_suffix`, and `series_suffix` omit punctuation when values are missing. Blank series directories disappear. Windows-invalid characters are sanitized. Existing destinations are never intentionally overwritten: duplicates go to ERROR.
+Use the Settings templates to change it. Optional `year_prefix`, `year_suffix`, and `series_suffix` omit punctuation when values are missing. Blank series directories disappear. Windows-invalid characters are sanitized. Existing destinations are never intentionally overwritten: collisions go to Already exists.
 
 ## Integrations
 
@@ -91,7 +91,7 @@ Back up `data/config` with containers stopped, along with `.env` and your librar
 
 Publication paths are frozen when processing starts, so changing naming settings during recovery does not create a second copy. An error with a saved publication plan offers **Retry unchanged publication**. Editing a failed job clears that plan only when its own final output has not already been published.
 
-No automatic cleanup is enabled. Private job work folders and abandoned hidden `.funnel-*` library staging folders may remain after failures; remove them manually only after verifying successful outputs and stopping the worker. Source changes detected after inspection require a new import under a new source-package name in this initial release. Existing package paths are deliberately not rediscovered as new books.
+Download archiving is disabled by default (see below). No automatic deletion is enabled. Private job work folders and abandoned hidden `.funnel-*` library staging folders may remain after failures; remove them manually only after verifying successful outputs and stopping the worker. Source changes detected after inspection require a new import under a new source-package name in this initial release. Existing package paths are deliberately not rediscovered as new books.
 
 The web service binds to localhost and has same-origin JSON mutation checks. It has no user accounts or authentication: do not expose port 8095 publicly. Configure Audiobookshelf to ignore hidden staging folders and prefer the explicit post-finalization scan over filesystem watching if your deployment notices partial imports.
 
@@ -108,4 +108,17 @@ python -m venv .venv
 
 Tests use temporary mounts and generated audio; they never need your audiobook files or provider credentials. They cover real remux/transcode/tag/cover/sidecar publication, grouping/order/exclusions, deduplication, immutable sources, collisions, settings/secret handling, deterministic scoring, ASIN parsing, and independent scan retries. Integration credentials and real services still need deployment-specific validation. API docs: `/docs`.
 
-See [architecture notes](docs/architecture.md). Initial limitations: no archive extraction, no cancellation of an active encode, no automatic cleanup, no cross-package merge, no exact previous reader.html template, no whole-database reconstruction from manifests, and no live tracking of Audiobookshelf scan completion.
+See [architecture notes](docs/architecture.md). Initial limitations: no archive extraction, no cancellation of an active encode, no automatic working-folder cleanup, no cross-package merge, no exact previous reader.html template, no whole-database reconstruction from manifests, and no live tracking of Audiobookshelf scan completion.
+
+## Archive completed downloads after seeding
+
+1. Create a processed-download folder outside RAW and your library, for example `D:/Downloads/audiobooks/processed`. Add `ARCHIVE_PATH=D:/Downloads/audiobooks/processed` to `.env`, then run `docker compose up -d --build`. It is mounted read-only at `/archive`; qBittorrent performs all moves and deletions.
+2. Save the qBittorrent Web UI address and login in Settings. **Test saved qBittorrent connection** must succeed. Torrent inbox submission can remain off.
+3. Under **Finished download archive**, set the RAW and processed paths as qBittorrent sees them (for native Windows qBittorrent: `D:/Downloads/audiobooks/raw` and `D:/Downloads/audiobooks/processed`). Leave the Docker processed path at `/archive`. Enable archiving.
+4. Keep qBittorrent's seeding-limit action at **Stop torrent**. Funnel reads the current per-torrent or global total-seeding-time limit each poll, including changes from 24 hours to longer limits. If no total-time limit is enabled, it can use a ratio limit. Inactive-time-only limits are deliberately not used as proof that seeding is finished. A total-time limit takes precedence when both time and ratio limits are configured. Turn off Automatic Torrent Management for archive candidates; Funnel does not change categories or seeding settings.
+5. Open **Download archive** to see waiting, blocked, moving, or **Ready to clear** downloads. Each torrent moves into a separate folder named by its torrent hash. The worker checks about once a minute when it is free; an active audio encode can delay the check.
+6. Use **Clear archived download** for a specific verified archive. Confirm the displayed torrent name. The worker rechecks the stopped state, seeding limit, archive contents, shared files, and library checksums, then asks qBittorrent to delete that archive and its torrent entry. No automatic deletion runs merely because a download was archived.
+
+Every audio file in a torrent must map to known, finished jobs. A package containing multiple books waits for all its books. Excluded/unrecognized audio, stale source files, unresolved reviews, errors, shared seeding files, or ambiguous mappings block cleanup. A library naming collision alone never permits cleanup: open **Already exists**, check the existing recording, and choose **Keep library copy; allow download cleanup**. The confirmed library audio is checksummed before its source is eligible. This confirmation can return to review until an archive move is planned.
+
+Move and deletion intents persist across restarts. qBittorrent's reported location and actual mounted files must agree before a download becomes Ready to clear. Archive contents are hashed before and after moving, and library audio is verified again before clearing. Unknown or manually relocated torrents are left for attention. Use the clear button instead of deleting archive folders in Explorer so qBittorrent stays consistent. A missing API connection stops cleanup; it does not affect normal book processing. Processing work folders remain separate and are not cleared by this feature.

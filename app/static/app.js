@@ -30,6 +30,10 @@ const fields = [
   "cover_url",
 ];
 const labels = {
+  qbit_archive_enabled: "Archive finished downloads after seeding",
+  qbit_source_path: "RAW folder as qBittorrent sees it",
+  qbit_archive_path: "Processed folder as qBittorrent sees it",
+  archive_path: "Processed folder inside Docker",
   qbit_enabled: "Submit torrent inbox to qBittorrent", qbit_url: "qBittorrent address",
   qbit_username: "Username", qbit_password: "Password", qbit_save_path: "qBittorrent save path",
   abs_enabled: "Scan Audiobookshelf after finalization", abs_url: "Audiobookshelf address",
@@ -68,7 +72,7 @@ async function act(fn) {
   }
 }
 function screen(name) {
-  for (const id of ["queue", "detail", "settings", "grouping"])
+  for (const id of ["queue", "detail", "settings", "grouping", "archives"])
     $("#" + id).hidden = id !== name;
   window.scrollTo(0, 0);
 }
@@ -98,11 +102,11 @@ async function queue() {
     notice(errors.map(([k, v]) => label(k) + ": " + v).join(" · "));
 }
 function drawQueue() {
-  const states = ["REVIEW", "READY", "PROCESSING", "COMPLETE", "ALREADY_EXISTS", "ERROR"];
+  const states = ["REVIEW", "READY", "PROCESSING", "COMPLETE", "ALREADY_EXISTS", "DUPLICATE_CONFIRMED", "ERROR"];
   $("#counts").innerHTML = states
     .map(
       (s) =>
-        `<div class="count"><span>${{ REVIEW: "Needs review", READY: "Ready / scheduled", PROCESSING: "Processing", COMPLETE: "In your library", ALREADY_EXISTS: "Already exists", ERROR: "Needs attention" }[s]}</span><strong>${snapshot.jobs.filter((j) => j.status === s).length}</strong></div>`,
+        `<div class="count"><span>${{ REVIEW: "Needs review", READY: "Ready / scheduled", PROCESSING: "Processing", COMPLETE: "In your library", ALREADY_EXISTS: "Already exists", DUPLICATE_CONFIRMED: "Confirmed duplicates", ERROR: "Needs attention" }[s]}</span><strong>${snapshot.jobs.filter((j) => j.status === s).length}</strong></div>`,
     )
     .join("");
   const filter = $("#filter").value;
@@ -159,12 +163,17 @@ async function detail(id) {
   actions.className = "panel";
   if (j.status === "REVIEW") {
     actions.innerHTML = `<h3>Automatic match check</h3><p>${j.automation.reasons.map(esc).join("<br>")}</p><button id="auto-match" ${j.automation.eligible ? "" : "disabled"}>Auto-match & queue</button><p class="muted">Uses the best unambiguous match and follows your processing schedule. Confirm grouping and save edits first.</p>`;
-  } else if (j.status === "ALREADY_EXISTS") {
-    actions.innerHTML = `<h3>Already exists in the library</h3><p>The destination folder is occupied. This may be a duplicate or a different edition with the same name. No files were overwritten or deleted.</p><button id="review-existing">Review metadata / naming</button>`;
+  } else if (["ALREADY_EXISTS", "DUPLICATE_CONFIRMED"].includes(j.status)) {
+    actions.innerHTML = `<h3>Already exists in the library</h3><p>The destination folder is occupied. This may be a duplicate or a different edition with the same name. No files were overwritten or deleted.</p><button id="review-existing">Review metadata / naming</button>${j.status === "ALREADY_EXISTS" ? '<button id="confirm-duplicate">Keep library copy; allow download cleanup</button>' : '<p>Duplicate confirmed. Waiting for all books and seeding before archiving.</p>'}`;
   } else if (["ERROR", "DISMISSED"].includes(j.status)) {
     actions.innerHTML = `<button id="dismiss-error">${j.status === "ERROR" ? "Dismiss error" : "Restore error"}</button><p class="muted">Hides the stale error from the active queue. No files are deleted. Dismissed errors can be restored from the queue filter.</p>`;
   }
   $("#detail").insertBefore(actions, $("#detail .split"));
+  if ($("#confirm-duplicate")) $("#confirm-duplicate").onclick = () => act(async () => {
+    if (!confirm("Have you checked that the existing library recording is the one you want to keep? This allows the download to be archived after seeding. Deleting the archive remains a separate action.")) return;
+    await api(`/jobs/${id}/confirm-duplicate`, "POST", {confirmed: true});
+    await detail(id);
+  });
   if ($("#review-existing")) $("#review-existing").onclick = () => act(async () => {
     await api(`/jobs/${id}/review-existing`, "POST", {});
     await detail(id);
@@ -381,6 +390,11 @@ const settingGroups = [
     ],
   ],
   [
+    "Finished download archive",
+    "Moves are performed by qBittorrent after its total seeding-time or ratio limit is met and all books are resolved. RAW and processed paths must match the Docker SOURCE_PATH and ARCHIVE_PATH mounts. Inactive-time-only limits wait for manual attention. Turn off Automatic Torrent Management for torrents you want archived. Clearing an archive always requires a separate confirmation.",
+    ["qbit_archive_enabled", "qbit_source_path", "qbit_archive_path", "archive_path"],
+  ],
+  [
     "Audiobookshelf",
     "Scan after a finalized batch. Failed scan requests retry independently. Token remains unchanged when left blank.",
     ["abs_enabled", "abs_url", "abs_token", "abs_library_id"],
@@ -396,7 +410,8 @@ async function showSettings() {
           `<div class="panel setting-group"><h2>${title}</h2><p class="muted">${help}</p><div class="field-grid">${keys.map((k) => (typeof v[k] === "boolean" ? `<label><input type="checkbox" name="${k}" ${v[k] ? "checked" : ""}>${label(k)}</label>` : `<label>${label(k)}<input name="${k}" type="${["qbit_password", "abs_token", "google_books_api_key"].includes(k) ? "password" : typeof v[k] === "number" ? "number" : "text"}" value="${esc(v[k])}" ${v[k + "_configured"] ? 'placeholder="Saved — leave blank to keep"' : ""}>${k.endsWith("_path") && roots[k.replace("_path", "").replace("torrent", "torrents")] ? `<small>Mounted root: ${esc(roots[k.replace("_path", "").replace("torrent", "torrents")])}</small>` : ""}</label>`)).join("")}</div></div>`,
       )
       .join("") +
-    '<button class="primary" type="submit">Save Settings</button>';
+    '<button class="primary" type="submit">Save Settings</button><button type="button" id="qbit-test">Test saved qBittorrent connection</button>';
+  $("#qbit-test").onclick = () => act(async () => notice((await api("/qbit/test", "POST", {})).message));
   $("#settings-form").onsubmit = (e) => {
     e.preventDefault();
     act(async () => {
@@ -427,3 +442,18 @@ act(queue);
 setInterval(() => {
   if (!$("#queue").hidden) act(queue);
 }, 15000);
+
+async function showArchives() {
+  const data = await api("/archives");
+  screen("archives");
+  const names = {WAITING: "Waiting for seeding", BLOCKED: "Needs attention", MOVING: "Moving / verifying", ARCHIVED: "Ready to clear", DELETE_REQUESTED: "Clear requested", DELETING: "Clearing / verifying", CLEARED: "Cleared"};
+  $("#archive-list").innerHTML = `<p>${data.enabled ? "Checks run about once a minute when the worker is free. Clearing deletes only this archived torrent's files and its qBittorrent entry." : "Archive integration is disabled. Configure it in Settings to begin."}</p>` + data.items.map(a => `<article class="panel"><h3>${esc(a.name)}</h3><strong>${esc(names[a.status] || a.status)}</strong>${a.body.destination ? `<p>${esc(a.body.destination)}</p>` : ""}${a.error ? `<p class="warning">${esc(a.error)}</p>` : ""}${a.status === "ARCHIVED" && !a.error ? `<button data-clear="${esc(a.hash)}" ${data.enabled ? "" : "disabled"}>Clear archived download</button>` : ""}</article>`).join("");
+  document.querySelectorAll("[data-clear]").forEach(button => button.onclick = () => act(async () => {
+    const item = data.items.find(a => a.hash === button.dataset.clear);
+    if (!confirm(`Permanently delete the archived download "${item.name}" and remove its qBittorrent entry? Your Audiobookshelf copy will be kept.`)) return;
+    await api(`/archives/${item.hash}/clear`, "POST", {confirmed: true});
+    await showArchives();
+  }));
+}
+$("#archives-nav").onclick = () => act(showArchives);
+$("#archives-refresh").onclick = () => act(showArchives);

@@ -16,6 +16,10 @@ x-common: &common
       read_only: true
     - ${WORK_PATH:-./data/work}:/work
     - ${LIBRARY_PATH:-./data/library}:/library
+    - type: bind
+      source: ${ARCHIVE_PATH:-./data/archive}
+      target: /archive
+      read_only: true
     - ./data/config:/config
 services:
   web:

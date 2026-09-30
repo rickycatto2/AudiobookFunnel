@@ -6,7 +6,7 @@ import pytest
 
 # Set mount roots before application modules are imported.
 _root = Path(tempfile.mkdtemp(prefix='funnel-tests-'))
-for name in ('source', 'work', 'library', 'torrents', 'data'):
+for name in ('source', 'work', 'library', 'torrents', 'archive', 'data'):
     os.environ['AF_' + name.upper()] = str(_root / name)
 
 from app import state

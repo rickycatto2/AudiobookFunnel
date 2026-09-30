@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 
 import httpx
 
-from app import media, metadata, state
+from app import archive, media, metadata, state
 
 log = logging.getLogger('funnel')
 
@@ -181,6 +181,15 @@ def worker_lock():
     return handle
 
 
+def archive_downloads(settings):
+    with state.db() as c:
+        row = c.execute("SELECT value FROM runtime WHERE key='archive_poll'").fetchone()
+    if row and time.time() - float(row['value']) < 60:
+        return
+    state.runtime('archive_poll', time.time())
+    archive.poll(settings)
+
+
 def main():
     logging.basicConfig(level=logging.INFO)
     state.init()
@@ -192,7 +201,7 @@ def main():
     while lock:
         state.runtime('worker_heartbeat', time.time())
         settings = state.settings()
-        for operation in ([discover] if settings.monitor_enabled else []) + [submit_torrents, inspect_pending, finalize_one, scan_library]:
+        for operation in ([discover] if settings.monitor_enabled else []) + [submit_torrents, inspect_pending, finalize_one, scan_library, archive_downloads]:
             try:
                 operation(settings)
                 state.runtime(operation.__name__ + '_error', '')

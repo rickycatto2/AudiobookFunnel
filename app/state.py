@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 from pydantic import BaseModel, Field, model_validator
 
 ROOTS = {name: Path(os.getenv('AF_' + name.upper(), default)).resolve() for name, default in
-         [('source', '/source'), ('work', '/work'), ('library', '/library'), ('torrents', '/torrents')]}
+         [('source', '/source'), ('work', '/work'), ('library', '/library'), ('torrents', '/torrents'), ('archive', '/archive')]}
 DATA = Path(os.getenv('AF_DATA', './data/config'))
 SECRET_FIELDS = {'qbit_password', 'abs_token', 'google_books_api_key'}
 
@@ -20,6 +20,7 @@ class Settings(BaseModel):
     work_path: str = str(ROOTS['work'])
     library_path: str = str(ROOTS['library'])
     torrent_path: str = str(ROOTS['torrents'])
+    archive_path: str = str(ROOTS['archive'])
     monitor_enabled: bool = False
     auto_approve: bool = False
     confidence_threshold: int = Field(85, ge=0, le=100)
@@ -38,6 +39,9 @@ class Settings(BaseModel):
     qbit_username: str = ''
     qbit_password: str = ''
     qbit_save_path: str = '/downloads/audiobooks/raw'
+    qbit_archive_enabled: bool = False
+    qbit_source_path: str = ''
+    qbit_archive_path: str = ''
     abs_enabled: bool = False
     abs_url: str = ''
     abs_token: str = ''
@@ -74,6 +78,11 @@ class Settings(BaseModel):
         for url in (self.qbit_url, self.abs_url):
             if url and not url.startswith(('http://', 'https://')):
                 raise ValueError('Integration URLs must use http or https')
+        if self.qbit_archive_enabled:
+            from app.archive import remote_path
+            source, archive = remote_path(self.qbit_source_path), remote_path(self.qbit_archive_path)
+            if source.is_relative_to(archive) or archive.is_relative_to(source):
+                raise ValueError('qBittorrent source and archive folders must not overlap')
         return self
 
 
@@ -104,6 +113,7 @@ def init():
         CREATE TABLE IF NOT EXISTS torrents (digest TEXT PRIMARY KEY, name TEXT NOT NULL, submitted REAL NOT NULL);
         CREATE TABLE IF NOT EXISTS scan_requests (id INTEGER PRIMARY KEY, status TEXT NOT NULL, error TEXT, updated REAL NOT NULL);
         CREATE TABLE IF NOT EXISTS runtime (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS archives (hash TEXT PRIMARY KEY, name TEXT NOT NULL, status TEXT NOT NULL, body TEXT NOT NULL, error TEXT, updated REAL NOT NULL);
         ''')
         c.execute('INSERT OR IGNORE INTO settings VALUES (1, ?)', (Settings().model_dump_json(),))
         # Reclassify only the two exact messages emitted by older releases.

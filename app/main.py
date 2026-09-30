@@ -11,7 +11,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, ValidationError
 
-from app import media, metadata, state, worker
+from app import archive, media, metadata, state, worker
 
 
 @asynccontextmanager
@@ -260,11 +260,70 @@ def dismiss_job(job_id: str, data: dict):
 @app.post('/api/jobs/{job_id}/review-existing')
 def review_existing(job_id: str, data: dict):
     with state.db() as c:
-        result = c.execute("UPDATE jobs SET status='REVIEW',error=NULL,updated=? WHERE id=? AND status='ALREADY_EXISTS'", (time.time(), job_id))
+        c.execute('BEGIN IMMEDIATE')
+        if archive.locked(c, job_id):
+            raise HTTPException(409, 'Source archiving has started; this book cannot return to review')
+        result = c.execute("UPDATE jobs SET status='REVIEW',error=NULL,updated=? WHERE id=? AND status IN ('ALREADY_EXISTS','DUPLICATE_CONFIRMED')", (time.time(), job_id))
         if result.rowcount != 1:
             raise HTTPException(409, 'Only Already exists jobs can use this action')
         state.event(c, job_id, 'Returned existing-library collision to review; check metadata and final naming before approving')
     return {'saved': True}
+
+
+@app.post('/api/jobs/{job_id}/confirm-duplicate')
+def confirm_duplicate(job_id: str, data: dict):
+    if data.get('confirmed') is not True:
+        raise HTTPException(400, 'Confirm that the existing library recording is the book you want to keep')
+    settings = state.settings()
+    with state.db() as c:
+        c.execute('BEGIN IMMEDIATE')
+        job = state.unpack(c.execute('SELECT * FROM jobs WHERE id=?', (job_id,)).fetchone())
+        if job['status'] != 'ALREADY_EXISTS':
+            raise HTTPException(409, 'Only Already exists books can be confirmed')
+        plan = job['body'].get('publication')
+        if not plan:
+            raise HTTPException(409, 'No saved library destination; return this book to review')
+        folder = media.contained(Path(plan['library_path']) / plan['relative'], settings.library_path)
+        files = [media.contained(p, folder) for p in folder.rglob('*') if p.is_file() and p.suffix.lower() in media.AUDIO]
+        if not files:
+            raise HTTPException(409, 'No existing library audio found; cleanup cannot be approved')
+        job['body']['duplicate_outputs'] = [{'path': str(p), 'sha256': media.digest(p)} for p in files]
+        c.execute("UPDATE jobs SET status='DUPLICATE_CONFIRMED',body=?,error=NULL,updated=? WHERE id=?", (json.dumps(job['body']), time.time(), job_id))
+        state.event(c, job_id, 'User confirmed the existing library recording; source eligible for archiving after seeding')
+    return {'saved': True}
+
+
+@app.get('/api/archives')
+def archives():
+    with state.db() as c:
+        rows = [dict(r) for r in c.execute('SELECT * FROM archives ORDER BY updated DESC')]
+    for row in rows:
+        row['body'] = json.loads(row['body'])
+    return {'enabled': state.settings().qbit_archive_enabled, 'items': rows}
+
+
+@app.post('/api/archives/{hash_}/clear')
+def clear_archive(hash_: str, data: dict):
+    if data.get('confirmed') is not True:
+        raise HTTPException(400, 'Confirm deletion of this archived download and its qBittorrent entry')
+    if not state.settings().qbit_archive_enabled:
+        raise HTTPException(409, 'Archive integration is disabled')
+    with state.db() as c:
+        result = c.execute("UPDATE archives SET status='DELETE_REQUESTED',error=NULL,updated=? WHERE hash=? AND status='ARCHIVED' AND error IS NULL", (time.time(), hash_))
+        if result.rowcount != 1:
+            raise HTTPException(409, 'Only a verified archive can be cleared')
+        state.event(c, None, 'User requested deletion of archived torrent ' + hash_)
+    return {'queued': True}
+
+
+@app.post('/api/qbit/test')
+def test_qbit(data: dict):
+    try:
+        with archive.connection(state.settings()) as client:
+            torrents = archive.get(client, 'torrents/info')
+        return {'message': f'Connected to qBittorrent ({len(torrents)} torrents). No torrents changed.'}
+    except (httpx.HTTPError, ValueError):
+        raise HTTPException(400, 'Cannot authenticate to qBittorrent. Check Web UI address, username, password, and allowed hosts.')
 
 
 @app.post('/api/jobs/{job_id}/restore')
