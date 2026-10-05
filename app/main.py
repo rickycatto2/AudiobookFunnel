@@ -1,4 +1,7 @@
 import json
+import base64
+import binascii
+import http.client
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -11,7 +14,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, ValidationError
 
-from app import archive, media, metadata, state, worker
+from app import archive, covers, media, metadata, state, worker
 
 
 @asynccontextmanager
@@ -156,12 +159,62 @@ def edit(job_id: str, data: Edit):
             if key in metadata.FIELDS and body['metadata'].get(key, '') != value:
                 body['metadata'][key] = value
                 body['provenance'][key] = 'Manual'
-        if data.cover_choice not in ('embedded', 'provider', 'none'):
+        if data.cover_choice == 'manual' and not body.get('manual_cover'):
+            raise ValueError('Import or upload a manual cover first')
+        if data.cover_choice not in ('embedded', 'provider', 'none', 'manual'):
             if not data.cover_choice.startswith('local:') or not 0 <= int(data.cover_choice[6:]) < len(body['covers']):
                 raise ValueError('Unknown cover selection')
         body['cover_choice'] = data.cover_choice
         body['grouping_confirmed'] = data.grouping_confirmed
     return edit_transaction(job_id, change)
+
+
+@app.post('/api/jobs/{job_id}/manual-cover')
+async def import_cover(job_id: str, request: Request):
+    editable(state.job(job_id))
+    raw = bytearray()
+    async for chunk in request.stream():
+        raw.extend(chunk)
+        if len(raw) > covers.LIMIT * 4 // 3 + 8192:
+            raise HTTPException(413, 'Cover exceeds 15 MB')
+    try:
+        payload = json.loads(raw)
+        if not isinstance(payload, dict):
+            raise ValueError('Invalid image upload')
+        url = str(payload.get('url', '')).strip()
+        encoded = payload.get('image', '')
+        if bool(url) == bool(encoded):
+            raise ValueError('Provide one image URL or upload')
+        # Run network/image processing outside the ASGI event loop.
+        from starlette.concurrency import run_in_threadpool
+        content = await run_in_threadpool(covers.fetch, url) if url else base64.b64decode(encoded, validate=True)
+        image = await run_in_threadpool(covers.normalize, content)
+    except (binascii.Error, json.JSONDecodeError, TypeError) as exc:
+        raise HTTPException(400, 'Invalid image upload') from exc
+    except (OSError, http.client.HTTPException) as exc:
+        raise HTTPException(400, 'Could not download the cover. Try another URL or upload it from your computer.') from exc
+    folder = media.contained(state.DATA / 'covers' / job_id, state.DATA / 'covers')
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / (uuid.uuid4().hex + '.jpg')
+    path.write_bytes(image)
+    def change(body):
+        body['manual_cover'] = {'filename': path.name, 'source': url or 'Computer upload'}
+        body['cover_choice'] = 'manual'
+        body['provenance']['cover'] = 'Manual URL' if url else 'Manual upload'
+    try:
+        return edit_transaction(job_id, change)
+    except Exception:
+        path.unlink(missing_ok=True)
+        raise
+
+
+@app.get('/api/jobs/{job_id}/manual-cover')
+def manual_cover(job_id: str):
+    cover = state.job(job_id)['body'].get('manual_cover')
+    if not cover:
+        raise HTTPException(404, 'No manual cover saved')
+    root = state.DATA / 'covers' / job_id
+    return FileResponse(media.contained(root / cover['filename'], root), media_type='image/jpeg')
 
 
 class Search(BaseModel):

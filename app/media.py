@@ -7,9 +7,6 @@ import shutil
 import subprocess
 import uuid
 from pathlib import Path
-from urllib.parse import urlparse
-
-import httpx
 from mutagen.mp4 import MP4, MP4Cover, MP4FreeForm
 from PIL import Image
 
@@ -122,21 +119,8 @@ def digest(path):
 
 
 def cover_download(url, dest):
-    host = urlparse(url).hostname or ''
-    # Only provider image hosts; no arbitrary localhost/file requests from cover fields.
-    allowed = ('media-amazon.com', 'ssl-images-amazon.com', 'images-amazon.com', 'google.com', 'googleusercontent.com', 'openlibrary.org')
-    if urlparse(url).scheme != 'https' or not any(host == d or host.endswith('.' + d) for d in allowed):
-        raise ValueError('Cover URL must be HTTPS on an Audible/Amazon, Google Books, or Open Library image host')
-    with httpx.stream('GET', url, timeout=30, follow_redirects=False) as response:
-        response.raise_for_status()
-        total = 0
-        with dest.open('wb') as f:
-            for chunk in response.iter_bytes():
-                total += len(chunk)
-                if total > 15 * 1024 * 1024:
-                    raise ValueError('Cover exceeds 15 MB')
-                f.write(chunk)
-    validate_cover(dest)
+    from app import covers
+    dest.write_bytes(covers.normalize(covers.fetch(url)))
 
 
 def validate_cover(path):
@@ -211,7 +195,12 @@ def process(job, settings):
         sources.append(staged)
     cover = None
     choice = body.get('cover_choice', 'embedded')
-    if choice == 'provider' and meta.get('cover_url'):
+    if choice == 'manual':
+        source_cover = contained(state.DATA / 'covers' / job_id / body['manual_cover']['filename'], state.DATA / 'covers' / job_id)
+        cover = work / 'selected-cover'
+        shutil.copy2(source_cover, cover)
+        validate_cover(cover)
+    elif choice == 'provider' and meta.get('cover_url'):
         cover = work / 'selected-cover'
         cover_download(meta['cover_url'], cover)
     elif choice.startswith('local:'):

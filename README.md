@@ -32,6 +32,8 @@ Settings can select subdirectories within these mounts. Host folders are control
 
 ## Review a book
 
+The review screen's **Add your own cover** section accepts a direct HTTPS image URL or an upload from your computer (JPEG, PNG, or WebP; maximum 15 MB / 20 megapixels). Importing validates the image, stores a JPEG in persistent config storage, selects **Use my cover**, and shows a local preview. It preserves your entered metadata and does not approve the book. The saved image is embedded in the M4B and published as `cover.jpg`. Invalid images leave the previous cover intact. Public HTTPS redirects are supported, including Open Library's redirects to Internet Archive; local/private network destinations are blocked. Back up `data/config/covers` with the database.
+
 1. Check completed downloads, or enable monitoring in Settings. A source directory is a package, potentially containing multiple books. Each root audio file is also accepted as a package.
 2. Open a job. Inspect duration, filenames, warnings, and ordering. Multi-file jobs always require grouping confirmation. **Review package grouping** lets you assign files to numbered books, set their order, and explicitly exclude samples. It resets metadata for that package; do this before metadata editing.
 3. Search Audible by title/author or paste an ASIN or Audible URL. Select a candidate to populate metadata; inspect its score breakdown. If unavailable, try a different Audible region in Settings, Google Books, Open Library, existing tags, or manual editing.
@@ -39,7 +41,7 @@ Settings can select subdirectories within these mounts. Host folders are control
 5. **Save & approve** queues the book. **Process now** overrides the heavy-processing window for that job. Queued jobs can return to review before the worker claims them.
 6. The worker copies and checks sources, creates an M4B, writes tags/art, verifies duration and full audio decode, generates sidecars, then publishes the complete folder. Errors retain source and work files. Fix the problem, save, and approve again.
 
-AAC sources with compatible stream parameters are copied without re-encoding. Other sources convert once to AAC. Multi-part source chapters are offset and preserved; unchaptered files become part chapters. Final M4B metadata includes title, author, narrator, year, series/position, genre, description, publisher, identifiers and language. Artwork uses its original JPEG/PNG bytes. `reader.html` is a new simple readable info page, not an exact copy of your previous MP3Tag template.
+AAC sources with compatible stream parameters are copied without re-encoding. Other sources convert once to AAC. Multi-part source chapters are offset and preserved; unchaptered files become part chapters. Final M4B metadata includes title, author, narrator, year, series/position, genre, description, publisher, identifiers and language. Embedded and local artwork keeps its original JPEG/PNG bytes; downloaded and uploaded covers are validated and normalized to JPEG. `reader.html` is a new simple readable info page, not an exact copy of your previous MP3Tag template.
 
 Default naming matches the prior workflow:
 
