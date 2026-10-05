@@ -1,5 +1,6 @@
 import hashlib
 import html
+import io
 import json
 import os
 import re
@@ -7,6 +8,7 @@ import shutil
 import subprocess
 import uuid
 from pathlib import Path
+from fractions import Fraction
 from mutagen.mp4 import MP4, MP4Cover, MP4FreeForm
 from PIL import Image
 
@@ -27,10 +29,44 @@ def probe(path):
         raise ValueError('Expected exactly one audio stream; review this source outside the automatic pipeline')
     stream = audio[0]
     duration = float(info.get('format', {}).get('duration') or stream.get('duration') or 0)
+    duration_note = ''
+    # Some long AAC MP4 files report a duration capped at the signed 32-bit
+    # boundary. Validate against actual packet timing instead of trusting it.
+    if stream['codec_name'] == 'aac' and int(stream.get('duration_ts') or 0) == 2 ** 31:
+        time_base = Fraction(stream['time_base'])
+        if time_base <= 0:
+            raise ValueError('Invalid audio time base')
+        packets = run(['ffprobe', '-v', 'error', '-select_streams', 'a:0', '-show_packets',
+                       '-show_entries', 'packet=pts,duration', '-of', 'csv=p=0', str(path)], timeout=600)
+        start, end, total, count, previous_end = None, 0, 0, 0, None
+        for line in io.StringIO(packets):
+            values = line.split(',')
+            if len(values) < 2:
+                continue  # ffprobe may include a separate side-data line
+            try:
+                pts, length = int(values[0]), int(values[1])
+            except ValueError:
+                raise ValueError('Cannot validate audio packet timing for this duration header')
+            if length <= 0:
+                raise ValueError('Invalid audio packet timing')
+            if previous_end is not None and abs(pts - previous_end) > 1:
+                raise ValueError('Audio packet timing is discontinuous; review the source before processing')
+            previous_end = pts + length
+            start, end = pts if start is None else min(start, pts), max(end, pts + length)
+            total += length
+            count += 1
+        if not count or abs(float(start * time_base)) > 1 or abs(float((total - (end - start)) * time_base)) > max(2, float(total * time_base) * .0001):
+            raise ValueError('Audio packet timing is discontinuous; review the source before processing')
+        if stream.get('nb_frames') and count != int(stream['nb_frames']):
+            raise ValueError('Audio packet count disagrees with the source; review before processing')
+        end = float(end * time_base)
+        if end > duration + 2:
+            duration_note = f'Source duration header capped at 2^31 ticks; verified {count} audio packets: {duration:.3f}s corrected to {end:.3f}s'
+            duration = end
     if duration <= 0:
         raise ValueError('Could not determine positive audio duration')
     tags = {k.lower(): v for k, v in info.get('format', {}).get('tags', {}).items()}
-    return {'duration': duration, 'codec': stream['codec_name'], 'sample_rate': stream.get('sample_rate'),
+    return {'duration': duration, 'duration_note': duration_note, 'codec': stream['codec_name'], 'sample_rate': stream.get('sample_rate'),
             'channels': stream.get('channels'), 'profile': stream.get('profile'), 'tags': tags,
             'chapters': info.get('chapters', []), 'cover': any(s.get('disposition', {}).get('attached_pic') for s in info.get('streams', []))}
 
@@ -192,6 +228,17 @@ def process(job, settings):
         shutil.copy2(src, staged)
         if digest(src) != digest(staged):
             raise ValueError('Staging checksum mismatch')
+        if f['codec'] == 'aac' and not f.get('duration_note'):
+            checked = probe(staged)
+            if checked.get('duration_note'):
+                f['original_duration'] = f['duration']
+                f['duration'] = checked['duration']
+                f['duration_note'] = checked['duration_note']
+                body['embedded']['duration'] = sum(part['duration'] for part in files)
+                meta['duration'] = body['embedded']['duration']
+                with state.db() as c:
+                    c.execute('UPDATE jobs SET body=? WHERE id=?', (json.dumps(body), job_id))
+                    state.event(c, job_id, checked['duration_note'])
         sources.append(staged)
     cover = None
     choice = body.get('cover_choice', 'embedded')

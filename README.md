@@ -93,6 +93,8 @@ Back up `data/config` with containers stopped, along with `.env` and your librar
 
 Publication paths are frozen when processing starts, so changing naming settings during recovery does not create a second copy. An error with a saved publication plan offers **Retry unchanged publication**. Editing a failed job clears that plan only when its own final output has not already been published.
 
+Some long AAC files have a source duration header capped at 2^31 ticks. Funnel checks their audio packet counts and timing to recover the actual duration, records the correction in activity history, and keeps lossless copying enabled. Existing failed jobs can use **Retry unchanged publication** to apply this check. Output-duration and full-decode validation still run before publication.
+
 Download archiving is disabled by default (see below). No automatic deletion is enabled. Private job work folders and abandoned hidden `.funnel-*` library staging folders may remain after failures; remove them manually only after verifying successful outputs and stopping the worker. Source changes detected after inspection require a new import under a new source-package name in this initial release. Existing package paths are deliberately not rediscovered as new books.
 
 The web service binds to localhost and has same-origin JSON mutation checks. It has no user accounts or authentication: do not expose port 8095 publicly. Configure Audiobookshelf to ignore hidden staging folders and prefer the explicit post-finalization scan over filesystem watching if your deployment notices partial imports.

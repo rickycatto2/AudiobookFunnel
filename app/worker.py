@@ -72,6 +72,9 @@ def inspect_pending(settings):
             for job_id, body, status in prepared:
                 c.execute('INSERT INTO jobs VALUES (?,?,?,?,?,?,?)', (job_id, package['id'], status, json.dumps(body), None, None, time.time()))
                 state.event(c, job_id, 'Inspected source; grouping proposed; metadata lookup attempted')
+                for file in body['files']:
+                    if file.get('duration_note'):
+                        state.event(c, job_id, file['duration_note'])
             c.execute("UPDATE packages SET status='INSPECTED',error=NULL WHERE id=?", (package['id'],))
     except Exception as exc:
         with state.db() as c:
