@@ -6,6 +6,33 @@ from urllib.parse import urlparse
 import httpx
 
 FIELDS = ['title', 'author', 'narrator', 'year', 'series', 'series_number', 'genre', 'description', 'publisher', 'copyright', 'isbn', 'asin', 'language', 'cover_url']
+DEFAULT_IGNORED_TITLE_TERMS = ['unabridged', 'abridged', 'full cast', 'full-cast', 'dramatized adaptation', 'dramatised adaptation']
+
+
+def clean_title(value, terms=None):
+    """Remove literal edition decorations, not words inside an actual book title."""
+    original = str(value or '').strip()
+    terms = DEFAULT_IGNORED_TITLE_TERMS if terms is None else terms
+    phrases = [re.escape(term.strip()).replace(r'\ ', r'\s+') for term in terms if term.strip()]
+    if not phrases:
+        return original
+    phrase = '(?:' + '|'.join(sorted(phrases, key=len, reverse=True)) + ')'
+    labels = phrase + r'(?:\s*[,;/+]\s*' + phrase + r')*'
+    title = original
+    for _ in range(20):
+        previous = title
+        title = re.sub(r'[\(\[]\s*' + labels + r'\s*[\)\]]', ' ', title, flags=re.I)
+        title = re.sub(r'(?:\s+[-–—:|]\s*|\s+)' + labels + r'\s*$', '', title, flags=re.I)
+        title = re.sub(r'^' + labels + r'\s*[-–—:|]\s+', '', title, flags=re.I)
+        title = re.sub(r'\s+', ' ', title).strip(' -–—:|')
+        if title == previous:
+            break
+    return title or original
+
+
+def title_similarity(a, b, source):
+    terms = source.get('_ignored_title_terms')
+    return similarity(clean_title(a, terms), clean_title(b, terms))
 
 
 def plain(text):
@@ -30,9 +57,10 @@ def similarity(a, b):
     return SequenceMatcher(None, norm(a), norm(b)).ratio() if a and b else 0
 
 
-def with_files(source, files):
+def with_files(source, files, ignored_title_terms=None):
     """Separate filename evidence from editable metadata; never infer a book from one track."""
-    return dict(source, _filenames=[files[0].get('relative') or files[0]['path']] if len(files) == 1 else [])
+    return dict(source, _filenames=[files[0].get('relative') or files[0]['path']] if len(files) == 1 else [],
+                _ignored_title_terms=ignored_title_terms)
 
 
 def generic_title(value):
@@ -50,7 +78,7 @@ def filename_pairs(source, author):
     pairs = []
     for filename in source.get('_filenames', []):
         name = filename.replace('\\', '/').rsplit('/', 1)[-1]
-        stem = filename_stem(name)
+        stem = clean_title(filename_stem(name), source.get('_ignored_title_terms'))
         parts = re.split(r'\s+[-–—]\s+', stem)
         for i in range(1, len(parts)):
             left, right = ' - '.join(parts[:i]), ' - '.join(parts[i:])
@@ -64,39 +92,43 @@ def filename_pairs(source, author):
 def search_terms(source):
     pairs = filename_pairs(source, source.get('author'))
     titles = {title for title, _, _ in pairs}
-    fallback = any(similarity(source.get('title'), filename_stem(name)) == 1 for _, _, name in pairs)
+    fallback = any(title_similarity(source.get('title'), filename_stem(name), source) == 1 for _, _, name in pairs)
     title = next(iter(titles)) if len(titles) == 1 and (generic_title(source.get('title')) or fallback) else source.get('title', '')
-    return title, source.get('author', '')
+    return clean_title(title, source.get('_ignored_title_terms')), source.get('author', '')
 
 
 def effective_evidence(source, candidate):
     effective = source.copy()
     notes, conflicts = {}, []
     pairs = filename_pairs(source, candidate.get('author'))
-    matches = [(title, author, name) for title, author, name in pairs if similarity(title, candidate.get('title')) == 1]
+    matches = [(title, author, name) for title, author, name in pairs if title_similarity(title, candidate.get('title'), source) == 1]
     if matches:
         title, author, name = matches[0]
         for field, value in [('title', title), ('author', author)]:
             original = source.get(field)
-            fallback = field == 'title' and (generic_title(original) or similarity(original, filename_stem(name)) == 1)
-            if original and similarity(original, value) < .9 and not fallback:
+            compare = (lambda a, b: title_similarity(a, b, source)) if field == 'title' else similarity
+            fallback = field == 'title' and (generic_title(original) or compare(original, filename_stem(name)) == 1)
+            if original and compare(original, value) < .9 and not fallback:
                 conflicts.append(f'filename vs embedded {field}')
             effective[field] = value
             notes[field] = f'100% filename match: {name}'
             if original and similarity(original, value) != 1:
                 notes[field] += f'; embedded {field}: {original}'
-    elif pairs and not any(similarity(title, candidate.get('title')) >= .9 for title, _, _ in pairs):
+    elif pairs and not any(title_similarity(title, candidate.get('title'), source) >= .9 for title, _, _ in pairs):
         conflicts.append('filename title differs from candidate')
     return effective, notes, conflicts
 
 
 def score(source, candidate):
+    original_title = source.get('title')
     source, filename_notes, filename_conflicts = effective_evidence(source, candidate)
     signals = []
     for field, weight in [('title', 35), ('author', 25), ('narrator', 10), ('series', 5), ('series_number', 5)]:
-        ratio = similarity(source.get(field), candidate.get(field))
+        ratio = title_similarity(source.get(field), candidate.get(field), source) if field == 'title' else similarity(source.get(field), candidate.get(field))
         signals.append({'field': field, 'points': round(weight * ratio, 1), 'maximum': weight,
                         'reason': filename_notes.get(field) or ('missing evidence' if not source.get(field) or not candidate.get(field) else f'{ratio:.0%} similarity')})
+        if field == 'title' and any(clean_title(x, source.get('_ignored_title_terms')) != str(x or '').strip() for x in (original_title, source.get(field), candidate.get(field))):
+            signals[-1]['reason'] += '; ignored configured title labels for comparison'
     a, b = source.get('duration', 0), candidate.get('duration', 0)
     ratio = max(0, 1 - abs(a - b) / max(a, b) / .15) if a and b else 0
     signals.append({'field': 'duration', 'points': round(15 * ratio, 1), 'maximum': 15, 'reason': f'{a:.0f}s source / {b:.0f}s provider' if a and b else 'missing evidence'})
@@ -105,12 +137,16 @@ def score(source, candidate):
     exact = bool(identifiers) and not conflict
     signals.append({'field': 'identifier', 'points': 5 if exact else 0, 'maximum': 5, 'reason': 'conflict: automation blocked' if conflict else 'exact' if exact else 'missing evidence'})
     conflicts = (['identifier'] if conflict else []) + filename_conflicts
+    # Removing search noise must not erase known abridged/unabridged disagreement.
+    editions = [set(re.findall(r'\b(?:unabridged|abridged)\b', str(v or '').casefold())) for v in (original_title, candidate.get('title'))]
+    if all(editions) and editions[0] != editions[1]:
+        conflicts.append('abridgement')
     for field in ('narrator', 'series', 'series_number', 'language'):
         if source.get(field) and candidate.get(field) and similarity(source[field], candidate[field]) < (1 if field == 'series_number' else .9):
             conflicts.append(field)
     base = round(sum(x['points'] for x in signals), 1)
     strong = (candidate.get('provider') == 'Audible'
-              and similarity(source.get('title'), candidate.get('title')) == 1
+              and title_similarity(source.get('title'), candidate.get('title'), source) == 1
               and similarity(source.get('author'), candidate.get('author')) == 1
               and a > 0 and b > 0 and abs(a - b) <= min(120, max(a, b) * .01)
               and not conflicts)
@@ -127,6 +163,7 @@ def may_automate(source, candidates, settings, grouping_confirmed):
 
 
 def automation_decision(source, candidates, settings, grouping_confirmed):
+    source = dict(source, _ignored_title_terms=settings.ignored_title_terms)
     reasons = []
     candidates = ranked(source, candidates)
     if not settings.auto_approve:
@@ -149,7 +186,7 @@ def automation_decision(source, candidates, settings, grouping_confirmed):
         if rivals and scoring['total'] - rivals[0]['confidence']['total'] < settings.confidence_margin:
             reasons.append('Competing edition is too close; choose the correct edition')
         effective, _, _ = effective_evidence(source, best)
-        if similarity(effective.get('title'), best.get('title')) < .9 or similarity(effective.get('author'), best.get('author')) < .9:
+        if title_similarity(effective.get('title'), best.get('title'), source) < .9 or similarity(effective.get('author'), best.get('author')) < .9:
             reasons.append('Title and author need stronger agreement')
         if not source.get('duration') or not best.get('duration'):
             reasons.append('Source and provider runtimes are required')
@@ -173,7 +210,8 @@ def audible_product(p):
                 duration=float(p.get('runtime_length_min') or 0) * 60, genre='; '.join(genres), cover_url=cover, provider='Audible')
 
 
-def search(provider, query, author='', region='com', asin='', google_key=''):
+def search(provider, query, author='', region='com', asin='', google_key='', ignored_title_terms=None):
+    query = clean_title(query, ignored_title_terms)
     with httpx.Client(timeout=25, follow_redirects=True) as client:
         if provider == 'Audible':
             params = {'response_groups': 'category_ladders,contributors,media,product_desc,product_extended_attrs,product_attrs,series,product_details', 'image_sizes': '500,1000,2400'}

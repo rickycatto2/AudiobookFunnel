@@ -43,10 +43,10 @@ def inspect_pending(settings):
             source = Path(package['source'])
             title = album or (Path(folder).name if folder != '.' else source.stem)
             meta = media.embedded(members, title)
-            evidence = metadata.with_files(meta, members)
+            evidence = metadata.with_files(meta, members, settings.ignored_title_terms)
             search_title, search_author = metadata.search_terms(evidence)
             try:
-                candidates = metadata.ranked(evidence, metadata.search('Audible', search_title, search_author, settings.audible_region))
+                candidates = metadata.ranked(evidence, metadata.search('Audible', search_title, search_author, settings.audible_region, ignored_title_terms=settings.ignored_title_terms))
                 lookup_error = ''
             except Exception as exc:
                 candidates, lookup_error = [], f'Metadata lookup unavailable ({type(exc).__name__}); retry search or edit manually.'

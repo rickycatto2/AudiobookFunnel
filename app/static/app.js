@@ -392,6 +392,7 @@ const settingGroups = [
       "confidence_threshold",
       "confidence_margin",
       "audible_region",
+      "ignored_title_terms",
       "google_books_api_key",
     ],
   ],
@@ -434,7 +435,7 @@ async function showSettings() {
     settingGroups
       .map(
         ([title, help, keys]) =>
-          `<div class="panel setting-group"><h2>${title}</h2><p class="muted">${help}</p><div class="field-grid">${keys.map((k) => (typeof v[k] === "boolean" ? `<label><input type="checkbox" name="${k}" ${v[k] ? "checked" : ""}>${label(k)}</label>` : `<label>${label(k)}<input name="${k}" type="${["qbit_password", "abs_token", "google_books_api_key"].includes(k) ? "password" : typeof v[k] === "number" ? "number" : "text"}" value="${esc(v[k])}" ${v[k + "_configured"] ? 'placeholder="Saved — leave blank to keep"' : ""}>${k.endsWith("_path") && roots[k.replace("_path", "").replace("torrent", "torrents")] ? `<small>Mounted root: ${esc(roots[k.replace("_path", "").replace("torrent", "torrents")])}</small>` : ""}</label>`)).join("")}</div></div>`,
+          `<div class="panel setting-group"><h2>${title}</h2><p class="muted">${help}</p><div class="field-grid">${keys.map((k) => (Array.isArray(v[k]) ? `<label>${label(k)}<textarea name="${k}" rows="7">${esc(v[k].join("\n"))}</textarea><small>One literal phrase per line. Ignored in brackets or at title edges for searching and matching. Original titles are preserved. Leave empty to disable.</small></label>` : typeof v[k] === "boolean" ? `<label><input type="checkbox" name="${k}" ${v[k] ? "checked" : ""}>${label(k)}</label>` : `<label>${label(k)}<input name="${k}" type="${["qbit_password", "abs_token", "google_books_api_key"].includes(k) ? "password" : typeof v[k] === "number" ? "number" : "text"}" value="${esc(v[k])}" ${v[k + "_configured"] ? 'placeholder="Saved — leave blank to keep"' : ""}>${k.endsWith("_path") && roots[k.replace("_path", "").replace("torrent", "torrents")] ? `<small>Mounted root: ${esc(roots[k.replace("_path", "").replace("torrent", "torrents")])}</small>` : ""}</label>`)).join("")}</div></div>`,
       )
       .join("") +
     '<button class="primary" type="submit">Save Settings</button><button type="button" id="qbit-test">Test saved qBittorrent connection</button>';
@@ -443,9 +444,11 @@ async function showSettings() {
     e.preventDefault();
     act(async () => {
       const values = {};
-      for (const input of $("#settings-form").querySelectorAll("input"))
+      for (const input of $("#settings-form").querySelectorAll("input, textarea"))
         values[input.name] =
-          input.type === "checkbox"
+          input.name === "ignored_title_terms"
+            ? input.value.split(/\r?\n/).map(x => x.trim()).filter(Boolean)
+            : input.type === "checkbox"
             ? input.checked
             : input.type === "number"
               ? Number(input.value)

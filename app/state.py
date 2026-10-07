@@ -25,6 +25,7 @@ class Settings(BaseModel):
     auto_approve: bool = False
     confidence_threshold: int = Field(85, ge=0, le=100)
     confidence_margin: int = Field(12, ge=0, le=100)
+    ignored_title_terms: list[str] = Field(default_factory=lambda: ['unabridged', 'abridged', 'full cast', 'full-cast', 'dramatized adaptation', 'dramatised adaptation'], max_length=100)
     folder_template: str = '{author}/{series}/{year_prefix}{title}{series_suffix}'
     file_template: str = '{title}{year_suffix}{series_suffix} - {author}'
     timezone: str = 'America/Chicago'
@@ -51,6 +52,9 @@ class Settings(BaseModel):
 
     @model_validator(mode='after')
     def validate_settings(self):
+        if any(len(term) > 80 or '\n' in term or '\r' in term for term in self.ignored_title_terms):
+            raise ValueError('Ignored title terms must be single-line phrases of at most 80 characters')
+        self.ignored_title_terms = list(dict.fromkeys(term.strip().casefold() for term in self.ignored_title_terms if term.strip()))
         try:
             ZoneInfo(self.timezone)
         except Exception as exc:
