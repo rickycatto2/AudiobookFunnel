@@ -61,10 +61,8 @@ def inspect_pending(settings):
             status = 'REVIEW'
             if metadata.may_automate(evidence, candidates, settings, confirmed):
                 selected = candidates[0]
-                for key in metadata.FIELDS:
-                    if selected.get(key):
-                        body['metadata'][key] = selected[key]
-                        body['provenance'][key] = selected['provider']
+                from app.selection import apply_candidate
+                apply_candidate(body, selected, automatic=True)
                 body['cover_choice'] = 'provider' if selected.get('cover_url') else 'embedded'
                 status = 'READY'
             prepared.append((str(uuid.uuid4()), body, status))

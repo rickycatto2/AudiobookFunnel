@@ -206,8 +206,10 @@ async function detail(id) {
     await detail(id);
   });
   if ($("#auto-match")) $("#auto-match").onclick = () => act(async () => {
-    await save();
-    await api(`/jobs/${id}/auto-match`, "POST", {});
+    const saved = await save();
+    await api(`/jobs/${id}/auto-match`, "POST", {
+      keep_manual_fields: reviewManualFields(saved.body, true),
+    });
     notice("Strong match queued for processing");
     await queue();
   });
@@ -258,10 +260,12 @@ async function detail(id) {
     (btn) =>
       (btn.onclick = () =>
         act(async () => {
-          await save();
+          const saved = await save();
           await api(`/jobs/${id}/select`, "POST", {
             index: Number(btn.dataset.candidate),
+            keep_manual_fields: reviewManualFields(saved.body),
           });
+          notice("Edition selected. Missing ISBN, ASIN and language are cleared unless you confirmed a manual override.");
           await detail(id);
         })),
   );
@@ -293,11 +297,18 @@ function readMetadata() {
   );
 }
 async function save() {
-  await api("/jobs/" + current.id, "PUT", {
+  return await api("/jobs/" + current.id, "PUT", {
     metadata: readMetadata(),
     cover_choice: $("#metadata-form [name=cover]:checked")?.value || "none",
     grouping_confirmed: $("#group-confirm").checked,
   });
+}
+function reviewManualFields(body, automatic = false) {
+  return fields.filter((field) =>
+    body.provenance[field] === "Manual" &&
+    (!automatic || ["isbn", "asin", "language"].includes(field)) &&
+    confirm(`Keep your manual ${field}: ${body.metadata[field] || "(blank)"} for this edition? Confirm only after checking it belongs to this match. Cancel uses the candidate value (missing ISBN, ASIN or language will be cleared).`)
+  );
 }
 async function approve(force) {
   await save();

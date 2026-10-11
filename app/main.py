@@ -15,6 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, ValidationError
 
 from app import archive, covers, media, metadata, state, worker
+from app.selection import apply_candidate
 
 
 @asynccontextmanager
@@ -249,6 +250,11 @@ def search(job_id: str, data: Search):
 
 class Selection(BaseModel):
     index: int = Field(ge=0)
+    keep_manual_fields: list[str] = Field(default_factory=list)
+
+
+class AutoMatch(BaseModel):
+    keep_manual_fields: list[str] = Field(default_factory=list)
 
 
 @app.post('/api/jobs/{job_id}/select')
@@ -258,17 +264,14 @@ def select(job_id: str, data: Selection):
         if data.index >= len(body['candidates']):
             raise ValueError('Candidate no longer exists; search again')
         candidate = body['candidates'][data.index]
-        for key in metadata.FIELDS:
-            if candidate.get(key):
-                body['metadata'][key] = str(candidate[key])
-                body['provenance'][key] = candidate['provider']
+        apply_candidate(body, candidate, data.keep_manual_fields)
         if candidate.get('cover_url'):
             body['cover_choice'] = 'provider'
     return edit_transaction(job_id, change)
 
 
 @app.post('/api/jobs/{job_id}/auto-match')
-def auto_match(job_id: str, data: dict):
+def auto_match(job_id: str, data: AutoMatch):
     settings = state.settings()
     with state.db() as c:
         c.execute('BEGIN IMMEDIATE')
@@ -285,12 +288,9 @@ def auto_match(job_id: str, data: dict):
             source = media.contained(file['path'], settings.source_path)
             if not source.is_file():
                 raise HTTPException(409, 'Source file is missing; restore it or dismiss the stale error')
-        # Preserve deliberate edits; this action fills untouched fields only.
+        # Edition identifiers must belong to this match, unless explicitly reviewed.
         best = body['candidates'][0]
-        for field in metadata.FIELDS:
-            if best.get(field) and body['provenance'].get(field) != 'Manual':
-                body['metadata'][field] = str(best[field])
-                body['provenance'][field] = best['provider']
+        apply_candidate(body, best, data.keep_manual_fields, automatic=True)
         if best.get('cover_url') and body.get('cover_choice') == 'embedded':
             body['cover_choice'] = 'provider'
         media.names(body['metadata'], settings)
