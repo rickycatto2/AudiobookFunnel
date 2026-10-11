@@ -1,0 +1,25 @@
+{
+  "products": [
+    {
+      "asin": "B0GFB7WK22",
+      "title": "The Sixth Faction",
+      "authors": [{"name": "Veronica Roth"}],
+      "narrators": [{"name": "Emma Love"}, {"name": "Charlie Thurston"}, {"name": "Max Meyers"}],
+      "language": "english",
+      "runtime_length_min": 960
+    },
+    {
+      "asin": "B0HCW29JJZ",
+      "title": "The Sixth Faction 01",
+      "authors": [
+        {"asin": "B004FX672S", "name": "Veronica Roth"},
+        {"name": "Teresa Englert - translator"},
+        {"name": "Anna-Saida Jessen - translator"},
+        {"name": "Susanne Seidita - translator"}
+      ],
+      "narrators": [{"name": "Janin Stenzel"}, {"name": "Jacob Weigert"}, {"name": "Nils Nelleßen"}],
+      "language": "german",
+      "runtime_length_min": 985
+    }
+  ]
+}

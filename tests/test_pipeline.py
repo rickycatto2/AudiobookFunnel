@@ -37,7 +37,7 @@ def test_real_media_end_to_end(configured, monkeypatch, codec):
         body = job['body']
         body['covers'] = [str(cover)]
         state.update_job(job['id'], 'REVIEW', body)
-        edit = client.put('/api/jobs/' + job['id'], json={'metadata': {'title': 'A <Book>', 'author': 'The Author', 'description': '<script>bad()</script>'}, 'grouping_confirmed': True, 'cover_choice': 'local:0'})
+        edit = client.put('/api/jobs/' + job['id'], json={'metadata': {'title': 'A <Book>', 'author': 'The Author', 'narrator': 'The Narrator', 'description': '<script>bad()</script>'}, 'grouping_confirmed': True, 'cover_choice': 'local:0'})
         assert edit.status_code == 200
         assert client.post(f"/api/jobs/{job['id']}/approve", json={'force_now': True}).status_code == 200
         assert worker.finalize_one(configured)
@@ -47,6 +47,14 @@ def test_real_media_end_to_end(configured, monkeypatch, codec):
         output = next(folder.glob('*.m4b'))
         assert MP4(output)['\xa9nam'] == ['A <Book>']
         assert MP4(output)['aART'] == ['The Author']
+        assert MP4(output)['\xa9ART'] == ['The Author']
+        assert MP4(output)['\xa9wrt'] == ['The Narrator']
+        info = media.probe(output)
+        assert info['tags']['artist'] == info['tags']['album_artist'] == 'The Author'
+        assert info['tags']['composer'] == 'The Narrator'
+        roundtrip = media.embedded([info], 'fallback')
+        assert roundtrip['author'] == 'The Author'
+        assert roundtrip['narrator'] == 'The Narrator'
         assert 'covr' in MP4(output)
         assert (folder / 'desc.txt').read_text() == '<script>bad()</script>'
         assert '<script>' not in (folder / 'reader.html').read_text()
@@ -54,6 +62,30 @@ def test_real_media_end_to_end(configured, monkeypatch, codec):
         assert media.digest(src) == original
         assert media.process(done, configured) == done['output']  # crash after publish recovery
         assert client.put('/api/jobs/' + job['id'], json={'metadata': {'title': 'Changed'}}).status_code == 409
+
+
+@pytest.mark.parametrize('narrator', [None, '', 'Narrator One, Narrator Two'])
+def test_m4b_contributor_tags(tmp_path, narrator):
+    output = tmp_path / 'book.m4b'
+    audio(output)
+    meta = {'title': 'Test Book', 'author': 'Author One, Author Two'}
+    if narrator is not None:
+        meta['narrator'] = narrator
+    media.write_tags(output, meta, None)
+
+    tags = MP4(output)
+    assert tags['\xa9ART'] == tags['aART'] == [meta['author']]
+    assert tags['\xa9nam'] == tags['\xa9alb'] == [meta['title']]
+    assert tags['stik'] == [2]
+    if narrator:
+        assert tags['\xa9wrt'] == [narrator]
+    else:
+        assert '\xa9wrt' not in tags  # Do not invent a narrator from the author.
+    info = media.probe(output)
+    assert info['tags']['artist'] == info['tags']['album_artist'] == meta['author']
+    roundtrip = media.embedded([info], 'fallback')
+    assert roundtrip['author'] == meta['author']
+    assert roundtrip['narrator'] == (narrator or '')
 
 
 def test_multi_book_grouping_and_order(configured, monkeypatch):

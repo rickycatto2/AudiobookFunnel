@@ -173,7 +173,9 @@ def write_tags(path, meta, cover):
         if meta.get(field):
             book[atom] = [str(meta[field])]
     book['\xa9alb'] = [meta['title']]
-    book['\xa9ART'] = [meta.get('narrator') or meta['author']]
+    # Audiobook scanners may use Artist rather than Album Artist for authors.
+    # Keep both author fields consistent; narrator remains in Composer (©wrt).
+    book['\xa9ART'] = [meta['author']]
     book['stik'] = [2]
     for field in ('series', 'series_number', 'publisher', 'asin', 'isbn', 'language'):
         if meta.get(field):

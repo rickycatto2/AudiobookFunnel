@@ -108,7 +108,8 @@ def effective_evidence(source, candidate):
             original = source.get(field)
             compare = (lambda a, b: title_similarity(a, b, source)) if field == 'title' else similarity
             fallback = field == 'title' and (generic_title(original) or compare(original, filename_stem(name)) == 1)
-            if original and compare(original, value) < .9 and not fallback:
+            disagrees = compare(original, value) != 1 if field == 'author' else compare(original, value) < .9
+            if original and disagrees and not fallback:
                 conflicts.append(f'filename vs embedded {field}')
             effective[field] = value
             notes[field] = f'100% filename match: {name}'
@@ -137,6 +138,11 @@ def score(source, candidate):
     exact = bool(identifiers) and not conflict
     signals.append({'field': 'identifier', 'points': 5 if exact else 0, 'maximum': 5, 'reason': 'conflict: automation blocked' if conflict else 'exact' if exact else 'missing evidence'})
     conflicts = (['identifier'] if conflict else []) + filename_conflicts
+    # A high fuzzy score is not evidence that a coauthor/role may be removed.
+    # Punctuation/case-only differences normalize equally; other disagreements
+    # must be reviewed, even if other fields raise the total above the threshold.
+    if source.get('author') and candidate.get('author') and similarity(source['author'], candidate['author']) != 1:
+        conflicts.append('author')
     # Removing search noise must not erase known abridged/unabridged disagreement.
     editions = [set(re.findall(r'\b(?:unabridged|abridged)\b', str(v or '').casefold())) for v in (original_title, candidate.get('title'))]
     if all(editions) and editions[0] != editions[1]:
@@ -195,6 +201,11 @@ def automation_decision(source, candidates, settings, grouping_confirmed):
 
 def audible_product(p):
     names = lambda field: '; '.join(x.get('name', '') for x in p.get(field, []))
+    # The public contributors response labels translators in authors[].name,
+    # not a separate role field. Only exclude an explicit terminal role label;
+    # unlabeled contributors (including multiple coauthors) remain authors.
+    authors = '; '.join(x.get('name', '') for x in p.get('authors', [])
+                        if not re.search(r'\s+[-–—]\s+translator\s*$', x.get('name', ''), re.I))
     series = (p.get('series') or [{}])[0]
     images = p.get('product_images') or {}
     cover = images.get('2400') or images.get('1000') or images.get('500') or next(iter(images.values()), '')
@@ -203,7 +214,7 @@ def audible_product(p):
         for category in ladder.get('ladder', []):
             if category.get('name') and category['name'] not in genres:
                 genres.append(category['name'])
-    return dict(title=p.get('title', ''), author=names('authors'), narrator=names('narrators'),
+    return dict(title=p.get('title', ''), author=authors, narrator=names('narrators'),
                 year=(p.get('release_date') or '')[:4], series=series.get('title', ''), series_number=series.get('sequence', ''),
                 description=plain(p.get('publisher_summary')), publisher=p.get('publisher_name', ''),
                 copyright=plain(p.get('copyright')), asin=p.get('asin', ''), isbn=p.get('isbn', ''), language=p.get('language', ''),

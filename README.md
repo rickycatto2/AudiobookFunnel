@@ -43,6 +43,8 @@ The review screen's **Add your own cover** section accepts a direct HTTPS image 
 
 AAC sources with compatible stream parameters are copied without re-encoding. Other sources convert once to AAC. Multi-part source chapters are offset and preserved; unchaptered files become part chapters. Final M4B metadata includes title, author, narrator, year, series/position, genre, description, publisher, identifiers and language. Embedded and local artwork keeps its original JPEG/PNG bytes; downloaded and uploaded covers are validated and normalized to JPEG. `reader.html` is a new simple readable info page, not an exact copy of your previous MP3Tag template.
 
+New M4B outputs store the **author in both Artist (`©ART`) and Album Artist (`aART`)**, and the **narrator in Composer (`©wrt`)**. This avoids presenting the narrator as author to scanners that read Artist. Existing published books are not retagged, and deployment-specific Audiobookshelf scan/settings behavior still needs verification.
+
 Default naming matches the prior workflow:
 
 ```text
