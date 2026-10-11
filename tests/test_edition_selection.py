@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 from app import state
 from app.main import app
 from app.selection import apply_candidate
-from tests.test_matching_review import seed
+from test_matching_review import seed
 
 
 @pytest.mark.parametrize('missing', ['isbn', 'asin', 'language'])
