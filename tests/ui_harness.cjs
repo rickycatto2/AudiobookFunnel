@@ -1,0 +1,212 @@
+"use strict";
+// Runs the real app/static/app.js inside a tiny DOM + fetch stub so the
+// review-queue UI behaviour can be checked without a browser.
+// Assertions print "ok"/"FAIL" lines; any failure exits non-zero for pytest.
+const fs = require("fs");
+const path = require("path");
+const vm = require("vm");
+
+const APP = path.join(__dirname, "..", "app", "static", "app.js");
+let failures = 0;
+function check(ok, message) {
+  console.log((ok ? "ok   " : "FAIL ") + message);
+  if (!ok) failures += 1;
+}
+
+const viewport = { y: 0, scrollIntoView: [], focus: [] };
+const registry = new Map();
+
+class Element {
+  constructor(key) {
+    this.key = key;
+    this._html = "";
+    this.hidden = false;
+    this.disabled = false;
+    this.checked = false;
+    this.value = "";
+    this.textContent = "";
+    this.className = "";
+    this.dataset = {};
+    this.style = {};
+    this.onclick = null;
+    this.onsubmit = null;
+  }
+  set innerHTML(v) { this._html = String(v); this._cache = {}; }
+  get innerHTML() { return this._html; }
+  // Parsed buttons are cached per rendered markup so that handlers wired by
+  // the app stay reachable when the test queries the same selector again.
+  parsed(attr) {
+    if (!this._cache) this._cache = {};
+    return this._cache[attr] || (this._cache[attr] = dataButtons(this._html, attr));
+  }
+  after() {}
+  insertBefore() {}
+  appendChild() {}
+  addEventListener() {}
+  querySelector() { return element("child"); }
+  querySelectorAll() { return []; }
+  focus() { viewport.focus.push(this.key); }
+  scrollIntoView(opts) { viewport.scrollIntoView.push({ key: this.key, opts }); }
+}
+
+function element(key) {
+  if (!registry.has(key)) registry.set(key, new Element(key));
+  return registry.get(key);
+}
+const camel = (attr) => attr.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+
+// Just enough markup parsing to recover buttons carrying data-* attributes,
+// which is how the app wires its list and count actions.
+function dataButtons(html, attr) {
+  const out = [];
+  const re = /<button\b([^>]*)>/g;
+  let m;
+  while ((m = re.exec(html))) {
+    const attrs = m[1];
+    const hit = attrs.match(new RegExp('\\bdata-' + attr + '="([^"]*)"'));
+    if (!hit) continue;
+    const el = new Element("[data-" + attr + "]");
+    el.dataset[camel(attr)] = hit[1];
+    el.disabled = /\sdisabled(\s|=|$)/.test(" " + attrs);
+    out.push(el);
+  }
+  return out;
+}
+
+const document = {
+  querySelector: (sel) => element(sel),
+  querySelectorAll: (sel) => {
+    const m = /^\[data-([a-z-]+)\]$/.exec(sel);
+    if (!m) return [];
+    const found = [];
+    for (const el of registry.values()) found.push(...el.parsed(m[1]));
+    return found;
+  },
+  createElement: (tag) => new Element(tag),
+};
+const window = {
+  scrollTo: (x, y) => { viewport.y = y; },
+  get scrollY() { return viewport.y; },
+};
+
+const metadata = {
+  title: "Five Found Dead", author: "Sulari Gentill", narrator: "", year: "",
+  series: "", series_number: "", genre: "", publisher: "", copyright: "",
+  isbn: "", asin: "", language: "", description: "", cover_url: "",
+};
+const provenance = Object.fromEntries(Object.keys(metadata).map((k) => [k, "Embedded"]));
+const file = {
+  relative: "five-found-dead/part1.m4b", duration: 28218, codec: "aac",
+  sample_rate: 44100, channels: 2, profile: "LC", cover: true, warning: "",
+};
+const job = (id, status, title) => ({
+  id, package_id: "pkg-1", status, error: "", output: "",
+  events: [{ created: 1700000000, message: "Inspected" }],
+  automation: { eligible: false, reasons: ["Grouping is not confirmed yet"] },
+  body: {
+    metadata: { ...metadata, title },
+    provenance,
+    files: [file],
+    embedded: { duration: 28218 },
+    grouping_confirmed: false,
+    lookup_error: "",
+    cover_choice: "embedded",
+    covers: [],
+    manual_cover: null,
+    candidates: [{
+      title, author: "Sulari Gentill", narrator: "Katherine Littrell", duration: 28200,
+      cover_url: "",
+      confidence: { total: 95, signals: [{ field: "title", points: 40, maximum: 40, reason: "Exact title" }] },
+    }],
+  },
+});
+const reviewJob = job("j1", "REVIEW", "Five Found Dead");
+const readyJob = job("j2", "READY", "A Ready Book");
+const snapshot = { jobs: [reviewJob, readyJob], packages: [], scans: [] };
+
+const calls = [];
+function route(method, url) {
+  if (url === "/api/jobs" && method === "GET") return snapshot;
+  if (url === "/api/health") return { runtime: { worker_heartbeat: 0 } };
+  if (/^\/api\/jobs\/[^/]+$/.test(url)) return reviewJob;
+  if (/^\/api\/jobs\/j1\/select$/.test(url)) return reviewJob;
+  return {};
+}
+async function fetch(url, opts = {}) {
+  const method = opts.method || "GET";
+  calls.push({ method, url, body: opts.body ? JSON.parse(opts.body) : undefined });
+  const data = route(method, url);
+  return { ok: true, status: 200, json: async () => data };
+}
+
+const sandbox = {
+  document, window, fetch, console,
+  setTimeout: () => 0,
+  setInterval: () => 0,
+  // Any confirm() means an implicit prompt slipped into a normal flow.
+  confirm: () => { throw new Error("unexpected confirm() in this flow"); },
+};
+vm.createContext(sandbox);
+const source = fs.readFileSync(APP, "utf8");
+vm.runInContext(source + "\n;globalThis.__hooks = { drawQueue, detail, queue };", sandbox, { filename: "app.js" });
+const hooks = sandbox.__hooks;
+const settle = () => new Promise((r) => setTimeout(r, 5));
+
+(async () => {
+  await settle(); // let the load-time queue() finish before asserting
+  await hooks.queue();
+  await settle();
+
+  // 1. Needs review is a real button carrying the correct count.
+  const counts = element("#counts").innerHTML;
+  check(/<button type="button" class="count count-filter" data-count-filter="REVIEW" aria-label="Needs review: 1/.test(counts),
+    "needs-review count renders as an accessible button with its total");
+  check(/data-count-filter="REVIEW"[^]*?<strong>1<\/strong><\/button>/.test(counts),
+    "needs-review count shows the number of REVIEW jobs");
+  check((counts.match(/<div class="count">/g) || []).length === 6,
+    "the other six count boxes stay plain divs");
+  check(counts.includes("Needs review"), "needs-review label is unchanged");
+
+  // 2. Activating it selects the REVIEW filter and jumps to the listing.
+  const countsButton = document.querySelectorAll("[data-count-filter]").find((b) => b.dataset.countFilter === "REVIEW");
+  check(!!countsButton && !countsButton.disabled, "count button is enabled and focusable");
+  countsButton.onclick();
+  check(element("#filter").value === "REVIEW", "count button selects the REVIEW queue filter");
+  check(element("#books").innerHTML.includes("Five Found Dead") && !element("#books").innerHTML.includes("A Ready Book"),
+    "listing shows only REVIEW books after activating the count");
+  check(viewport.scrollIntoView.some((s) => s.key === "#books"), "viewport moves to the filtered listing");
+
+  // 3. Opening a book from the queue still starts at the top.
+  viewport.y = 640;
+  await hooks.detail("j1");
+  check(element("#detail").innerHTML.includes('id="approve-top"'), "review detail offers a top-level Save & approve button");
+  check(viewport.y === 0, "opening a book from the queue scrolls to the top on purpose");
+
+  // 4. Choosing a candidate keeps the reader near their place.
+  const candidate = document.querySelectorAll("[data-candidate]")[0];
+  check(!!candidate && !candidate.disabled, "candidate selection button is enabled");
+  viewport.y = 1200;
+  await candidate.onclick();
+  check(calls.some((c) => c.method === "POST" && c.url === "/api/jobs/j1/select"), "candidate selection saves the edition");
+  check(viewport.y === 1200, "scroll position is preserved after 'Use this metadata'");
+
+  // 5. Approving stays an explicit action through the existing endpoint.
+  const approveCalls = () => calls.filter((c) => c.method === "POST" && c.url === "/api/jobs/j1/approve");
+  check(approveCalls().length === 0, "nothing is approved implicitly while reviewing");
+  const approveTop = element("#approve-top");
+  check(typeof approveTop.onclick === "function", "top Save & approve button is wired up");
+  await approveTop.onclick();
+  check(approveCalls().length === 1 && approveCalls()[0].body.force_now === false,
+    "top Save & approve reuses the existing approve endpoint without forcing an encode");
+  check(approveCalls()[0].body.force_now !== true, "no implicit immediate processing override");
+
+  // 6. Returning to the queue still resets the viewport.
+  await hooks.queue();
+  check(viewport.y === 0, "navigating back to the queue resets the scroll on purpose");
+
+  console.log(failures ? `\n${failures} UI check(s) failed` : "\nall UI checks passed");
+  process.exit(failures ? 1 : 0);
+})().catch((e) => {
+  console.error(e);
+  process.exit(1);
+});

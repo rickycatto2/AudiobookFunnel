@@ -128,6 +128,24 @@ button:disabled {
   opacity: 0.5;
   cursor: wait;
 }
+button.count {
+  display: block;
+  width: 100%;
+  text-align: left;
+  color: inherit;
+  font: inherit;
+  padding: 18px;
+  border: 1px solid #e0e5dc;
+  border-radius: 12px;
+}
+button.count:hover {
+  background: #f4f8f3;
+  border-color: #ccd7cb;
+}
+button.count:focus-visible {
+  outline: 2px solid #245c46;
+  outline-offset: 2px;
+}
 .primary {
   background: #245c46;
   color: #fff;

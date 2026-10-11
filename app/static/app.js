@@ -103,11 +103,15 @@ async function queue() {
 }
 function drawQueue() {
   const states = ["REVIEW", "READY", "PROCESSING", "COMPLETE", "ALREADY_EXISTS", "DUPLICATE_CONFIRMED", "ERROR"];
+  const titles = { REVIEW: "Needs review", READY: "Ready / scheduled", PROCESSING: "Processing", COMPLETE: "In your library", ALREADY_EXISTS: "Already exists", DUPLICATE_CONFIRMED: "Confirmed duplicates", ERROR: "Needs attention" };
   $("#counts").innerHTML = states
-    .map(
-      (s) =>
-        `<div class="count"><span>${{ REVIEW: "Needs review", READY: "Ready / scheduled", PROCESSING: "Processing", COMPLETE: "In your library", ALREADY_EXISTS: "Already exists", DUPLICATE_CONFIRMED: "Confirmed duplicates", ERROR: "Needs attention" }[s]}</span><strong>${snapshot.jobs.filter((j) => j.status === s).length}</strong></div>`,
-    )
+    .map((s) => {
+      const total = snapshot.jobs.filter((j) => j.status === s).length;
+      const box = `<span>${titles[s]}</span><strong>${total}</strong>`;
+      return s === "REVIEW"
+        ? `<button type="button" class="count count-filter" data-count-filter="REVIEW" aria-label="Needs review: ${total}. Show these books in the queue">${box}</button>`
+        : `<div class="count">${box}</div>`;
+    })
     .join("");
   const filter = $("#filter").value;
   const jobs = snapshot.jobs.filter((j) => (filter ? j.status === filter : j.status !== "DISMISSED"));
@@ -130,6 +134,15 @@ function drawQueue() {
     ? `<details><summary>Audiobookshelf scan requests</summary>${snapshot.scans.map((s) => `<p>${esc(s.status)} ${esc(s.error || "Scan request accepted")}</p>`).join("")}</details>`
     : "";
   document
+    .querySelectorAll("[data-count-filter]")
+    .forEach((b) => (b.onclick = () => {
+      $("#filter").value = b.dataset.countFilter;
+      drawQueue();
+      const again = document.querySelector(`[data-count-filter="${b.dataset.countFilter}"]`);
+      if (again) again.focus();
+      $("#books").scrollIntoView({ block: "start" });
+    }));
+  document
     .querySelectorAll("[data-open]")
     .forEach((b) => (b.onclick = () => act(() => detail(b.dataset.open))));
   document.querySelectorAll("[data-package-retry]").forEach(
@@ -151,6 +164,10 @@ function drawQueue() {
     $("#empty-settings").onclick = () => act(showSettings);
 }
 async function detail(id) {
+  // Re-rendering the book already on screen (candidate selection, search,
+  // saves) keeps the reader near where they were instead of jumping to top.
+  const keepScroll = !$("#detail").hidden && current && current.id === id;
+  const scrollY = window.scrollY;
   current = await api("/jobs/" + id);
   const j = current,
     b = j.body,
@@ -158,7 +175,7 @@ async function detail(id) {
     editable = ["REVIEW", "ERROR"].includes(j.status);
   screen("detail");
   $("#detail").innerHTML =
-    `<button id="back">← Book queue</button><div class="heading"><div><p class="eyebrow">BOOK REVIEW</p><h1>${esc(m.title)}</h1><span class="badge ${j.status}">${j.status === "ALREADY_EXISTS" ? "Already exists" : j.status}</span></div><button id="group" ${editable ? "" : "disabled"}>Review package grouping</button></div>${j.error ? `<div class="error">${esc(j.error)}</div>` : ""}${b.lookup_error ? `<div class="warning">${esc(b.lookup_error)}</div>` : ""}${j.status === "ERROR" && b.publication ? '<button id="recover">Retry unchanged publication</button>' : ""}${j.output ? `<p class="preview">Published to ${esc(j.output)}</p>` : ""}<div class="split"><div><div class="panel"><h2>Source audio</h2><p>${duration(b.embedded.duration)} · ${mediaMode(b.files)}</p>${b.files.map((f, i) => `<div class="file"><strong>${i + 1}.</strong> ${esc(f.relative)}<br><span class="muted">${duration(f.duration)} · ${esc(f.codec)}</span>${f.warning ? `<div class="warning">${esc(f.warning)}</div>` : ""}</div>`).join("")}<p><label><input id="group-confirm" type="checkbox" ${b.grouping_confirmed ? "checked" : ""} ${editable ? "" : "disabled"}>These files are one book, in the correct order</label></p></div><div class="panel"><h2>Find the right edition</h2><label>Metadata source<select id="provider"><option>Audible</option><option>Google Books</option><option>Open Library</option></select></label><label>Title<input id="query" value="${esc(m.title)}"></label><label>Author<input id="search-author" value="${esc(m.author)}"></label><label>ASIN or Audible URL (optional)<input id="asin" placeholder="B0… or https://www.audible.com/pd/…"></label><div class="actions"><button id="search" ${editable ? "" : "disabled"}>Search</button><button id="embedded" ${editable ? "" : "disabled"}>Use existing metadata</button></div><div id="candidates">${b.candidates.map((c, i) => `<div class="candidate">${image(c.cover_url)}<h3>${esc(c.title)}</h3><p>${esc(c.author)}<br><small>${esc(c.narrator || "Narrator unavailable")} · ${c.duration ? duration(c.duration) : "Print-book metadata"}</small></p><strong>${c.confidence.total}% evidence score</strong><details><summary>Why this score?</summary><div class="signals">${c.confidence.signals.map((s) => `${esc(label(s.field))}: ${s.points}/${s.maximum} — ${esc(s.reason)}`).join("<br>")}</div></details><button data-candidate="${i}" ${editable ? "" : "disabled"}>Use this metadata</button></div>`).join("") || '<p class="muted">Search for candidates, paste an ASIN, or enter metadata yourself.</p>'}</div></div></div><div><div class="panel"><h2>Final metadata</h2><form id="metadata-form"><div class="field-grid">${fields.map((f) => `<label class="${["description", "cover_url"].includes(f) ? "wide" : ""}">${esc(label(f))}${f === "description" ? `<textarea name="${f}" ${editable ? "" : "disabled"}>${esc(m[f])}</textarea>` : `<input name="${f}" value="${esc(m[f])}" ${editable ? "" : "disabled"}>`}<small>${esc(b.provenance[f] || "Not set")}</small></label>`).join("")}</div><h3>Cover selection</h3><div class="cover-choice"><label>${b.files[0].cover ? `<img src="/api/jobs/${j.id}/embedded-cover" alt="Embedded artwork">` : ""}<input type="radio" name="cover" value="embedded" ${b.cover_choice === "embedded" ? "checked" : ""}>Embedded artwork</label><label>${image(m.cover_url)}<input type="radio" name="cover" value="provider" ${b.cover_choice === "provider" ? "checked" : ""}>Metadata cover</label><label><input type="radio" name="cover" value="none" ${b.cover_choice === "none" ? "checked" : ""}>No cover</label>${b.covers.map((p, i) => `<label><img src="/api/jobs/${j.id}/cover/${i}" alt="Local cover ${i + 1}"><input type="radio" name="cover" value="local:${i}" ${b.cover_choice === `local:${i}` ? "checked" : ""}>Local ${i + 1}</label>`).join("")}</div><div class="actions"><button type="button" id="preview">Preview final name</button><button type="submit" ${editable ? "" : "disabled"}>Save edits</button></div><p id="name-preview" class="preview" hidden></p></form><div class="actions">${editable ? '<button class="primary" id="approve">Save & approve</button><button id="now">Process now</button>' : j.status === "READY" ? '<button id="unqueue">Return to review</button>' : ""}</div><small>Approve follows the processing window. Process now overrides it for this book.</small></div><details class="panel"><summary>Activity history</summary>${j.events.map((e) => `<p><small>${new Date(e.created * 1000).toLocaleString()}</small><br>${esc(e.message)}</p>`).join("")}</details></div></div>`;
+    `<button id="back">← Book queue</button><div class="heading"><div><p class="eyebrow">BOOK REVIEW</p><h1>${esc(m.title)}</h1><span class="badge ${j.status}">${j.status === "ALREADY_EXISTS" ? "Already exists" : j.status}</span></div><button id="group" ${editable ? "" : "disabled"}>Review package grouping</button></div>${editable ? '<div class="actions"><button class="primary" id="approve-top">Save & approve</button></div>' : ""}${j.error ? `<div class="error">${esc(j.error)}</div>` : ""}${b.lookup_error ? `<div class="warning">${esc(b.lookup_error)}</div>` : ""}${j.status === "ERROR" && b.publication ? '<button id="recover">Retry unchanged publication</button>' : ""}${j.output ? `<p class="preview">Published to ${esc(j.output)}</p>` : ""}<div class="split"><div><div class="panel"><h2>Source audio</h2><p>${duration(b.embedded.duration)} · ${mediaMode(b.files)}</p>${b.files.map((f, i) => `<div class="file"><strong>${i + 1}.</strong> ${esc(f.relative)}<br><span class="muted">${duration(f.duration)} · ${esc(f.codec)}</span>${f.warning ? `<div class="warning">${esc(f.warning)}</div>` : ""}</div>`).join("")}<p><label><input id="group-confirm" type="checkbox" ${b.grouping_confirmed ? "checked" : ""} ${editable ? "" : "disabled"}>These files are one book, in the correct order</label></p></div><div class="panel"><h2>Find the right edition</h2><label>Metadata source<select id="provider"><option>Audible</option><option>Google Books</option><option>Open Library</option></select></label><label>Title<input id="query" value="${esc(m.title)}"></label><label>Author<input id="search-author" value="${esc(m.author)}"></label><label>ASIN or Audible URL (optional)<input id="asin" placeholder="B0… or https://www.audible.com/pd/…"></label><div class="actions"><button id="search" ${editable ? "" : "disabled"}>Search</button><button id="embedded" ${editable ? "" : "disabled"}>Use existing metadata</button></div><div id="candidates">${b.candidates.map((c, i) => `<div class="candidate">${image(c.cover_url)}<h3>${esc(c.title)}</h3><p>${esc(c.author)}<br><small>${esc(c.narrator || "Narrator unavailable")} · ${c.duration ? duration(c.duration) : "Print-book metadata"}</small></p><strong>${c.confidence.total}% evidence score</strong><details><summary>Why this score?</summary><div class="signals">${c.confidence.signals.map((s) => `${esc(label(s.field))}: ${s.points}/${s.maximum} — ${esc(s.reason)}`).join("<br>")}</div></details><button data-candidate="${i}" ${editable ? "" : "disabled"}>Use this metadata</button></div>`).join("") || '<p class="muted">Search for candidates, paste an ASIN, or enter metadata yourself.</p>'}</div></div></div><div><div class="panel"><h2>Final metadata</h2><form id="metadata-form"><div class="field-grid">${fields.map((f) => `<label class="${["description", "cover_url"].includes(f) ? "wide" : ""}">${esc(label(f))}${f === "description" ? `<textarea name="${f}" ${editable ? "" : "disabled"}>${esc(m[f])}</textarea>` : `<input name="${f}" value="${esc(m[f])}" ${editable ? "" : "disabled"}>`}<small>${esc(b.provenance[f] || "Not set")}</small></label>`).join("")}</div><h3>Cover selection</h3><div class="cover-choice"><label>${b.files[0].cover ? `<img src="/api/jobs/${j.id}/embedded-cover" alt="Embedded artwork">` : ""}<input type="radio" name="cover" value="embedded" ${b.cover_choice === "embedded" ? "checked" : ""}>Embedded artwork</label><label>${image(m.cover_url)}<input type="radio" name="cover" value="provider" ${b.cover_choice === "provider" ? "checked" : ""}>Metadata cover</label><label><input type="radio" name="cover" value="none" ${b.cover_choice === "none" ? "checked" : ""}>No cover</label>${b.covers.map((p, i) => `<label><img src="/api/jobs/${j.id}/cover/${i}" alt="Local cover ${i + 1}"><input type="radio" name="cover" value="local:${i}" ${b.cover_choice === `local:${i}` ? "checked" : ""}>Local ${i + 1}</label>`).join("")}</div><div class="actions"><button type="button" id="preview">Preview final name</button><button type="submit" ${editable ? "" : "disabled"}>Save edits</button></div><p id="name-preview" class="preview" hidden></p></form><div class="actions">${editable ? '<button class="primary" id="approve">Save & approve</button><button id="now">Process now</button>' : j.status === "READY" ? '<button id="unqueue">Return to review</button>' : ""}</div><small>Approve follows the processing window. Process now overrides it for this book.</small></div><details class="panel"><summary>Activity history</summary>${j.events.map((e) => `<p><small>${new Date(e.created * 1000).toLocaleString()}</small><br>${esc(e.message)}</p>`).join("")}</details></div></div>`;
   const manual = document.createElement("div");
   manual.className = "panel";
   manual.innerHTML = `<h3>Add your own cover</h3><p>Use a direct image URL or upload a JPEG, PNG, or WebP image (up to 15 MB). The saved preview is the image that will be embedded.</p>${b.manual_cover ? `<label><img style="max-width:150px;max-height:180px" src="/api/jobs/${id}/manual-cover?v=${esc(b.manual_cover.filename)}" alt="Your saved cover"><input type="radio" name="cover" value="manual" ${b.cover_choice === "manual" ? "checked" : ""} ${editable ? "" : "disabled"}>Use my cover</label><p class="muted">${esc(b.provenance.cover || "Manual cover")}</p>` : ""}<label>Image URL<input id="manual-cover-url" type="url" placeholder="https://…/cover.jpg" ${editable ? "" : "disabled"}></label><button type="button" id="import-cover-url" ${editable ? "" : "disabled"}>Import cover from URL</button><label>Upload from computer<input id="manual-cover-file" type="file" accept="image/jpeg,image/png,image/webp" ${editable ? "" : "disabled"}></label><button type="button" id="upload-cover" ${editable ? "" : "disabled"}>Upload and use cover</button>`;
@@ -276,6 +293,7 @@ async function detail(id) {
       $("#name-preview").hidden = false;
     });
   if ($("#approve")) $("#approve").onclick = () => act(() => approve(false));
+  if ($("#approve-top")) $("#approve-top").onclick = () => act(() => approve(false));
   if ($("#now")) $("#now").onclick = () => act(() => approve(true));
   if ($("#unqueue"))
     $("#unqueue").onclick = () =>
@@ -283,6 +301,7 @@ async function detail(id) {
         await api(`/jobs/${id}/review`, "POST", {});
         await detail(id);
       });
+  if (keepScroll) window.scrollTo(0, scrollY);
 }
 function mediaMode(files) {
   return files.every((f) => f.codec === "aac") &&
