@@ -48,7 +48,7 @@ def test_manual_identifier_requires_confirmation_for_this_match(configured, acti
         assert result.status_code == 200, result.text
         body = state.job(job_id)['body']
         assert body['metadata']['isbn'] == ('9783333333333' if confirmed else '')
-        assert body['metadata']['language'] == ('french' if confirmed else '')
+        assert body['metadata']['language'] == ('french' if confirmed else 'english')
         assert body['metadata']['asin'] == ('B333333333' if confirmed else 'B012345678')
         assert body['provenance']['isbn'] == ('Manual' if confirmed else 'Audible (not supplied)')
         if confirmed and action == 'select':
@@ -72,7 +72,8 @@ def test_old_review_remains_unchanged_until_explicit_rematch(configured):
         client.put('/api/settings', json={'auto_approve': True})
         assert client.post(f'/api/jobs/{job_id}/auto-match', json={}).status_code == 200
     after = state.job(job_id)['body']
-    assert after['metadata']['isbn'] == after['metadata']['language'] == ''
+    assert after['metadata']['isbn'] == ''
+    assert after['metadata']['language'] == 'english'
     assert after['metadata']['asin'] == 'B012345678'
     assert after['embedded'] == before['embedded']
     assert path.read_bytes() == b'source stays untouched'
@@ -92,13 +93,14 @@ def test_manual_edit_after_selection_is_deliberate(configured):
     with TestClient(app) as client:
         assert client.post(f'/api/jobs/{job_id}/select', json={'index': 0}).status_code == 200
         result = client.put(f'/api/jobs/{job_id}', json={
-            'metadata': {'isbn': '9784444444444', 'asin': '', 'language': 'english'},
+            'metadata': {'isbn': '9784444444444', 'asin': '', 'language': 'eng'},
             'grouping_confirmed': True,
         })
         assert result.status_code == 200
         body = state.job(job_id)['body']
         assert body['metadata']['isbn'] == '9784444444444'
         assert body['metadata']['asin'] == ''
+        assert body['metadata']['language'] == 'eng'
         assert all(body['provenance'][field] == 'Manual' for field in ('isbn', 'asin', 'language'))
 
 

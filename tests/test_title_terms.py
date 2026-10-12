@@ -43,8 +43,8 @@ def test_provider_requests_clean_title_without_changing_author(monkeypatch, prov
 
 
 def test_matching_and_filename_use_same_cleaning(configured):
-    source = metadata.with_files({'title': 'The Book (Unabridged)', 'author': 'Writer', 'duration': 3600}, [{'relative': 'The Book - Writer (Full Cast).m4b'}])
-    candidate = {'title': 'The Book', 'author': 'Writer', 'duration': 3600, 'provider': 'Audible'}
+    source = metadata.with_files({'title': 'The Book (Unabridged)', 'author': 'Writer', 'duration': 3600, 'language': 'english'}, [{'relative': 'The Book - Writer (Full Cast).m4b'}])
+    candidate = {'title': 'The Book', 'author': 'Writer', 'duration': 3600, 'provider': 'Audible', 'language': 'english', 'region': 'com', 'asin': 'B012345678'}
     assert metadata.search_terms(source) == ('The Book', 'Writer')
     assert metadata.score(source, candidate)['strong_match']
     assert metadata.may_automate(source, [candidate], configured.model_copy(update={'auto_approve': True}), True)

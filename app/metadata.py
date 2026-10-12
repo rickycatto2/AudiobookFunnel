@@ -57,10 +57,25 @@ def similarity(a, b):
     return SequenceMatcher(None, norm(a), norm(b)).ratio() if a and b else 0
 
 
+def language(value):
+    value = str(value or '').strip().casefold()
+    aliases = {'en': 'english', 'eng': 'english', 'de': 'german', 'deu': 'german', 'ger': 'german',
+               'fr': 'french', 'fra': 'french', 'fre': 'french', 'es': 'spanish', 'spa': 'spanish',
+               'it': 'italian', 'ita': 'italian', 'ja': 'japanese', 'jpn': 'japanese'}
+    return aliases.get(value, value) if value not in ('und', 'unknown', 'undefined') else ''
+
+
 def with_files(source, files, ignored_title_terms=None):
     """Separate filename evidence from editable metadata; never infer a book from one track."""
+    conflicts = []
+    for field, tags in [('author', ('album_artist', 'artist')), ('language', ('language',)), ('asin', ('asin',)), ('isbn', ('isbn',))]:
+        values = [next((f.get('tags', {}).get(k) for k in tags if f.get('tags', {}).get(k)), '') for f in files]
+        normalize = language if field == 'language' else lambda x: ' '.join(re.findall(r'\w+', str(x).casefold()))
+        known = {normalize(v) for v in values if normalize(v)}
+        if len(known) > 1:
+            conflicts.append('source files disagree on ' + field)
     return dict(source, _filenames=[files[0].get('relative') or files[0]['path']] if len(files) == 1 else [],
-                _ignored_title_terms=ignored_title_terms)
+                _ignored_title_terms=ignored_title_terms, _source_conflicts=conflicts)
 
 
 def generic_title(value):
@@ -137,7 +152,7 @@ def score(source, candidate):
     conflict = any(str(source[k]).upper() != str(candidate[k]).upper() for k in identifiers)
     exact = bool(identifiers) and not conflict
     signals.append({'field': 'identifier', 'points': 5 if exact else 0, 'maximum': 5, 'reason': 'conflict: automation blocked' if conflict else 'exact' if exact else 'missing evidence'})
-    conflicts = (['identifier'] if conflict else []) + filename_conflicts
+    conflicts = (['identifier'] if conflict else []) + filename_conflicts + source.get('_source_conflicts', [])
     # A high fuzzy score is not evidence that a coauthor/role may be removed.
     # Punctuation/case-only differences normalize equally; other disagreements
     # must be reviewed, even if other fields raise the total above the threshold.
@@ -147,13 +162,19 @@ def score(source, candidate):
     editions = [set(re.findall(r'\b(?:unabridged|abridged)\b', str(v or '').casefold())) for v in (original_title, candidate.get('title'))]
     if all(editions) and editions[0] != editions[1]:
         conflicts.append('abridgement')
-    for field in ('narrator', 'series', 'series_number', 'language'):
+    if a and b and abs(a - b) > min(120, max(a, b) * .01):
+        conflicts.append('duration')
+    if language(source.get('language')) and language(candidate.get('language')) and language(source['language']) != language(candidate['language']):
+        conflicts.append('language')
+    for field in ('narrator', 'series', 'series_number'):
         if source.get(field) and candidate.get(field) and similarity(source[field], candidate[field]) < (1 if field == 'series_number' else .9):
             conflicts.append(field)
     base = round(sum(x['points'] for x in signals), 1)
     strong = (candidate.get('provider') == 'Audible'
               and title_similarity(source.get('title'), candidate.get('title'), source) == 1
               and similarity(source.get('author'), candidate.get('author')) == 1
+              and bool(language(source.get('language')))
+              and language(source.get('language')) == language(candidate.get('language'))
               and a > 0 and b > 0 and abs(a - b) <= min(120, max(a, b) * .01)
               and not conflicts)
     bonus = round(max(0, 95 - base), 1) if strong else 0
@@ -183,23 +204,31 @@ def automation_decision(source, candidates, settings, grouping_confirmed):
         scoring = best['confidence']
         if best.get('provider') != 'Audible':
             reasons.append('Fallback book metadata requires manual approval')
+        if best.get('region') != settings.audible_region:
+            reasons.append('Candidate region is missing or differs from the configured Audible region; search again')
+        if not best.get('asin'):
+            reasons.append('Provider edition identifier is required')
+        if any(source.get(k) and not best.get(k) for k in ('asin', 'isbn')):
+            reasons.append('Provider is missing a known source identifier; verify the edition manually')
+        if not language(source.get('language')) or not language(best.get('language')):
+            reasons.append('Source and provider language evidence are required; filenames do not establish language')
         if scoring['conflict']:
             reasons.append('Conflicting evidence: ' + ', '.join(scoring['conflicts']))
         if scoring['total'] < settings.confidence_threshold:
             reasons.append(f"Score {scoring['total']} is below threshold {settings.confidence_threshold}")
         # Repeated responses for the same ASIN are not a second edition.
-        rivals = [c for c in candidates[1:] if not (best.get('asin') and c.get('asin') == best['asin'] and c.get('provider') == best.get('provider'))]
+        rivals = [c for c in candidates[1:] if not c['confidence']['conflict'] and not (best.get('asin') and c.get('asin') == best['asin'] and c.get('provider') == best.get('provider'))]
         if rivals and scoring['total'] - rivals[0]['confidence']['total'] < settings.confidence_margin:
             reasons.append('Competing edition is too close; choose the correct edition')
         effective, _, _ = effective_evidence(source, best)
-        if title_similarity(effective.get('title'), best.get('title'), source) < .9 or similarity(effective.get('author'), best.get('author')) < .9:
+        if title_similarity(effective.get('title'), best.get('title'), source) != 1 or similarity(effective.get('author'), best.get('author')) != 1:
             reasons.append('Title and author need stronger agreement')
         if not source.get('duration') or not best.get('duration'):
             reasons.append('Source and provider runtimes are required')
     return {'eligible': not reasons, 'reasons': reasons or ['Strong, unambiguous match; eligible for automatic approval']}
 
 
-def audible_product(p):
+def audible_product(p, region=None):
     names = lambda field: '; '.join(x.get('name', '') for x in p.get(field, []))
     # The public contributors response labels translators in authors[].name,
     # not a separate role field. Only exclude an explicit terminal role label;
@@ -218,7 +247,7 @@ def audible_product(p):
                 year=(p.get('release_date') or '')[:4], series=series.get('title', ''), series_number=series.get('sequence', ''),
                 description=plain(p.get('publisher_summary')), publisher=p.get('publisher_name', ''),
                 copyright=plain(p.get('copyright')), asin=p.get('asin', ''), isbn=p.get('isbn', ''), language=p.get('language', ''),
-                duration=float(p.get('runtime_length_min') or 0) * 60, genre='; '.join(genres), cover_url=cover, provider='Audible')
+                duration=float(p.get('runtime_length_min') or 0) * 60, genre='; '.join(genres), cover_url=cover, provider='Audible', region=region)
 
 
 def search(provider, query, author='', region='com', asin='', google_key='', ignored_title_terms=None):
@@ -230,11 +259,11 @@ def search(provider, query, author='', region='com', asin='', google_key='', ign
             if asin:
                 response = client.get(base + '/' + asin_from(asin), params=params)
                 response.raise_for_status()
-                return [audible_product(response.json()['product'])]
+                return [audible_product(response.json()['product'], region)]
             params.update({'title': query, 'author': author, 'num_results': 8, 'products_sort_by': 'Relevance'})
             response = client.get(base, params=params)
             response.raise_for_status()
-            return [audible_product(p) for p in response.json().get('products', [])]
+            return [audible_product(p, region) for p in response.json().get('products', [])]
         if provider == 'Google Books':
             params = {'q': f'intitle:{query} inauthor:{author}' if author else query, 'maxResults': 8}
             if google_key:
@@ -261,4 +290,23 @@ def search(provider, query, author='', region='com', asin='', google_key='', ign
 def ranked(source, candidates):
     for candidate in candidates:
         candidate['confidence'] = score(source, candidate)
-    return sorted(candidates, key=lambda x: x['confidence']['total'], reverse=True)
+    return sorted(candidates, key=lambda x: (not x['confidence']['conflict'], x['confidence']['total']), reverse=True)
+
+
+def approval_warnings(body, settings):
+    selected = body.get('selected_candidate')
+    if not selected:
+        return ['No selected provider edition provenance. Verify author, language, runtime and identifiers before publishing.']
+    # Compare the actual edited fields, but use provider runtime, not source duration.
+    candidate = dict(selected, **{k: body['metadata'].get(k, '') for k in FIELDS})
+    evidence = with_files(body['embedded'], body['files'], settings.ignored_title_terms)
+    scoring = score(evidence, candidate)
+    warnings = []
+    if scoring['conflict']:
+        warnings.append('Edition conflicts: ' + ', '.join(scoring['conflicts']))
+    if not scoring['strong_match'] or selected.get('region') != settings.audible_region:
+        warnings.append('Insufficient exact source/edition/region evidence. Check the audio and provider edition yourself; do not infer language from the filename.')
+    changed = [k for k in ('title', 'author', 'asin', 'isbn', 'language') if str(body['metadata'].get(k) or '') != str(selected.get(k) or '')]
+    if changed:
+        warnings.append('Edited values differ from selected provider edition: ' + ', '.join(changed))
+    return warnings

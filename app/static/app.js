@@ -330,7 +330,8 @@ function reviewManualFields(body, automatic = false) {
   );
 }
 async function approve(force) {
-  await save();
+  const saved = await save();
+  if (saved.approval_warnings?.length && !confirm(saved.approval_warnings.join("\n") + "\n\nI have checked this edition and want to publish these metadata values. Continue?")) return;
   await api(`/jobs/${current.id}/approve`, "POST", { force_now: force });
   notice(
     force

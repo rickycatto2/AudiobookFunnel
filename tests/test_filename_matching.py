@@ -7,8 +7,8 @@ from test_matching_review import seed
 
 
 def example(filename="Devil's Slide - Stacy Lynn Miller.mp3", title='Speakeasy Series'):
-    source = metadata.with_files(dict(title=title, author='Stacy Lynn Miller', duration=38217), [{'relative': filename}])
-    candidate = dict(title="Devil's Slide", author='Stacy Lynn Miller', duration=38160, provider='Audible')
+    source = metadata.with_files(dict(title=title, author='Stacy Lynn Miller', duration=38217, language='english'), [{'relative': filename}])
+    candidate = dict(title="Devil's Slide", author='Stacy Lynn Miller', duration=38160, provider='Audible', language='english', region='com', asin='B012345678')
     return source, candidate
 
 

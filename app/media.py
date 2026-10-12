@@ -66,6 +66,10 @@ def probe(path):
     if duration <= 0:
         raise ValueError('Could not determine positive audio duration')
     tags = {k.lower(): v for k, v in info.get('format', {}).get('tags', {}).items()}
+    stream_language = stream.get('tags', {}).get('language', '')
+    from app.metadata import language
+    if not language(tags.get('language')) and language(stream_language):
+        tags['language'] = stream_language  # Explicit stream tag, never a filename guess.
     return {'duration': duration, 'duration_note': duration_note, 'codec': stream['codec_name'], 'sample_rate': stream.get('sample_rate'),
             'channels': stream.get('channels'), 'profile': stream.get('profile'), 'tags': tags,
             'chapters': info.get('chapters', []), 'cover': any(s.get('disposition', {}).get('attached_pic') for s in info.get('streams', []))}
@@ -195,9 +199,23 @@ class DestinationExists(ValueError):
     """A naming collision, not proof that the audio is identical."""
 
 
+class AutomaticReview(ValueError):
+    """Automatic edition evidence no longer permits publication."""
+
+
 def process(job, settings):
     body, job_id = job['body'], job['id']
     files, meta = body['files'], body['metadata']
+    def check_automatic_edition():
+        if body.get('automatic_approval'):
+            from app import metadata
+            selected = body.get('selected_candidate', {})
+            candidate = dict(selected, **{k: meta.get(k, '') for k in metadata.FIELDS})
+            evidence = metadata.with_files(body['embedded'], files, settings.ignored_title_terms)
+            decision = metadata.automation_decision(evidence, [candidate], settings, body['grouping_confirmed'])
+            if not decision['eligible']:
+                raise AutomaticReview('Automatic publication blocked; return to review: ' + '; '.join(decision['reasons']))
+    check_automatic_edition()
     work = contained(Path(settings.work_path) / job_id, settings.work_path)
     work.mkdir(parents=True, exist_ok=True)
     relative, filename = names(meta, settings)
@@ -242,6 +260,7 @@ def process(job, settings):
                     c.execute('UPDATE jobs SET body=? WHERE id=?', (json.dumps(body), job_id))
                     state.event(c, job_id, checked['duration_note'])
         sources.append(staged)
+    check_automatic_edition()  # Recheck any corrected source duration before publication.
     cover = None
     choice = body.get('cover_choice', 'embedded')
     if choice == 'manual':

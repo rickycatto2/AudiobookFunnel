@@ -11,8 +11,8 @@ from app.main import app
 
 
 def pair(title='Five Found Dead', duration=28218, narrator='Katherine Littrell; Eden Gabay'):
-    source = dict(title=title, author='Sulari Gentill', duration=duration, narrator=narrator)
-    candidate = dict(source, duration=28200, provider='Audible', asin='B012345678')
+    source = dict(title=title, author='Sulari Gentill', duration=duration, narrator=narrator, language='english')
+    candidate = dict(source, duration=28200, provider='Audible', asin='B012345678', region='com')
     return source, candidate
 
 

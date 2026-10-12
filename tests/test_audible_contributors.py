@@ -81,7 +81,7 @@ def test_search_and_direct_asin_share_contributor_mapping(catalog, monkeypatch, 
 
 
 def test_scores_and_recommendations_still_require_correct_edition(catalog, configured):
-    candidates = [metadata.audible_product(p) for p in catalog['products']]
+    candidates = [metadata.audible_product(p, 'com') for p in catalog['products']]
     settings = configured.model_copy(update={'auto_approve': True})
     english, translated = candidates
     source = {k: english[k] for k in ('title', 'author', 'narrator', 'language', 'duration')}
@@ -107,8 +107,8 @@ def test_scores_and_recommendations_still_require_correct_edition(catalog, confi
 def test_real_coauthors_remain_part_of_score(catalog, configured):
     product = catalog['products'][0]
     product['authors'].append({'name': 'Actual Coauthor'})
-    candidate = metadata.audible_product(product)
-    source = dict(title=candidate['title'], author='Veronica Roth; Actual Coauthor', duration=candidate['duration'])
+    candidate = metadata.audible_product(product, 'com')
+    source = dict(title=candidate['title'], author='Veronica Roth; Actual Coauthor', duration=candidate['duration'], language=candidate['language'])
     assert metadata.score(source, candidate)['strong_match']
     assert metadata.may_automate(source, [candidate], configured.model_copy(update={'auto_approve': True}), True)
     source['author'] = 'Veronica Roth'

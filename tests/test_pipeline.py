@@ -167,7 +167,7 @@ def test_settings_secrets_and_paths(configured):
 
 
 def test_confidence_and_asin(configured):
-    source = {'title': 'Dune', 'author': 'Frank Herbert', 'duration': 72000, 'asin': 'B012345678'}
+    source = {'title': 'Dune', 'author': 'Frank Herbert', 'duration': 72000, 'asin': 'B012345678', 'language': 'english'}
     candidate = dict(source, provider='Audible')
     result = metadata.score(source, candidate)
     assert result['base_total'] == 80

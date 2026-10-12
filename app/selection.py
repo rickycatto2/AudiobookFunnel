@@ -13,6 +13,8 @@ def apply_candidate(body, candidate, keep_manual_fields=(), *, automatic=False):
     An absent edition field means unknown, not evidence for the previous edition.
     """
     keep = set(keep_manual_fields)
+    body['selected_candidate'] = candidate.copy()
+    body['automatic_approval'] = automatic and not keep
     provenance = body['provenance']
     if any(key not in metadata.FIELDS or provenance.get(key) != 'Manual' for key in keep):
         raise ValueError('Only explicitly reviewed Manual fields can be retained')

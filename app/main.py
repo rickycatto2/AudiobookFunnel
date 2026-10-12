@@ -102,6 +102,7 @@ def get_job(job_id: str):
     evidence = metadata.with_files(obj['body']['embedded'], obj['body']['files'], state.settings().ignored_title_terms)
     obj['body']['candidates'] = metadata.ranked(evidence, obj['body']['candidates'])
     obj['automation'] = metadata.automation_decision(evidence, obj['body']['candidates'], state.settings(), obj['body']['grouping_confirmed'])
+    obj['approval_warnings'] = metadata.approval_warnings(obj['body'], state.settings())
     with state.db() as c:
         obj['events'] = [dict(r) for r in c.execute('SELECT * FROM events WHERE job_id=? ORDER BY id', (job_id,))]
     return obj
@@ -167,7 +168,10 @@ def edit(job_id: str, data: Edit):
                 raise ValueError('Unknown cover selection')
         body['cover_choice'] = data.cover_choice
         body['grouping_confirmed'] = data.grouping_confirmed
-    return edit_transaction(job_id, change)
+    saved = edit_transaction(job_id, change)
+    # Save responses feed the publish confirmation; carry the same warnings as GET.
+    saved['approval_warnings'] = metadata.approval_warnings(saved['body'], state.settings())
+    return saved
 
 
 @app.post('/api/jobs/{job_id}/manual-cover')
@@ -291,6 +295,11 @@ def auto_match(job_id: str, data: AutoMatch):
         # Edition identifiers must belong to this match, unless explicitly reviewed.
         best = body['candidates'][0]
         apply_candidate(body, best, data.keep_manual_fields, automatic=True)
+        if body.get('automatic_approval'):
+            actual = dict(best, **{k: body['metadata'].get(k, '') for k in metadata.FIELDS})
+            actual_decision = metadata.automation_decision(evidence, [actual], settings, body['grouping_confirmed'])
+            if not actual_decision['eligible']:
+                raise HTTPException(409, 'Retained manual metadata needs manual approval: ' + '; '.join(actual_decision['reasons']))
         if best.get('cover_url') and body.get('cover_choice') == 'embedded':
             body['cover_choice'] = 'provider'
         media.names(body['metadata'], settings)
@@ -429,6 +438,7 @@ def approve(job_id: str, data: dict):
             raise ValueError('Confirm these files represent one book in the correct order')
         media.names(job['body']['metadata'], settings)
         job['body']['force_now'] = bool(data.get('force_now', False))
+        job['body']['automatic_approval'] = False  # Explicit manual approval/override.
         c.execute("UPDATE jobs SET status='READY',body=?,error=NULL,updated=? WHERE id=?", (json.dumps(job['body']), time.time(), job_id))
         state.event(c, job_id, 'Approved for finalization' + (' (processing window overridden)' if data.get('force_now') else ''))
     return {'queued': True}
