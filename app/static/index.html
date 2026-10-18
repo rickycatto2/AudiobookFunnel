@@ -50,6 +50,17 @@
         <div id="books"></div>
         <div id="scans"></div>
       </section>
+      <dialog id="playlist-dialog" aria-labelledby="playlist-heading">
+        <h2 id="playlist-heading">Add to playlist</h2>
+        <p id="playlist-book"></p>
+        <p id="playlist-status" role="status"></p>
+        <label>Target Audiobookshelf playlist<select id="playlist-target"></select></label>
+        <div class="actions"><button id="playlist-add">Add to playlist</button><button id="playlist-retry">Retry lookup / refresh playlists</button></div>
+        <p class="muted">Not found yet? Run a library scan in Audiobookshelf, then retry lookup. This does not start a scan.</p>
+        <label>New playlist name<input id="playlist-name" maxlength="200" placeholder="TBR"></label>
+        <button id="playlist-create">Create new playlist</button>
+        <button id="playlist-close">Close</button>
+      </dialog>
       <section id="detail" hidden></section>
       <section id="settings" hidden>
         <p class="eyebrow">MAKE IT YOURS</p>

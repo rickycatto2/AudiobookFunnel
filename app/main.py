@@ -14,7 +14,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, ValidationError
 
-from app import archive, covers, media, metadata, state, worker
+from app import archive, audiobookshelf as abs_api, covers, media, metadata, state, worker
 from app.selection import apply_candidate
 
 
@@ -94,6 +94,57 @@ def jobs():
         return {'jobs': [state.unpack(r) for r in c.execute('SELECT * FROM jobs ORDER BY updated DESC')],
                 'packages': [dict(r) for r in c.execute('SELECT * FROM packages ORDER BY created DESC')],
                 'scans': [dict(r) for r in c.execute('SELECT * FROM scan_requests ORDER BY id DESC LIMIT 10')]}
+
+
+@app.get('/api/playlists')
+def list_playlists():
+    with abs_api.connection(state.settings()) as client:
+        return {'playlists': abs_api.playlists(client)}
+
+
+class Playlist(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+
+
+@app.post('/api/playlists')
+def create_playlist(data: Playlist):
+    name = data.name.strip()
+    if not name:
+        raise HTTPException(400, 'Enter a playlist name.')
+    settings = state.settings()
+    with abs_api.connection(settings) as client:
+        row = abs_api.request(client, 'POST', 'playlists', json={'name': name, 'libraryId': settings.abs_library_id, 'items': []})
+        return {'id': row['id'], 'name': row['name']}
+
+
+@app.get('/api/jobs/{job_id}/library-item')
+def lookup_library_item(job_id: str):
+    settings = state.settings()
+    with abs_api.connection(settings) as client:
+        return {'libraryItemId': abs_api.resolve(client, settings, state.job(job_id))}
+
+
+class PlaylistItem(BaseModel):
+    job_id: str
+
+
+@app.post('/api/playlists/{playlist_id}/items')
+def add_playlist_item(playlist_id: str, data: PlaylistItem):
+    settings = state.settings()
+    with abs_api.connection(settings) as client:
+        item_id = abs_api.resolve(client, settings, state.job(data.job_id))
+        path = 'playlists/' + abs_api.identifier(playlist_id)
+        playlist = abs_api.request(client, 'GET', path)
+        if playlist['libraryId'] != settings.abs_library_id:
+            raise HTTPException(409, 'Choose a playlist in the configured Audiobookshelf library.')
+        already = any(item.get('libraryItemId') == item_id for item in playlist['items'])
+        if not already:
+            abs_api.request(client, 'POST', path + '/item', json={'libraryItemId': item_id})
+        message = ('Already in ' if already else 'Added to ') + playlist['name']
+        # Do not retain upstream text in activity history (including playlist names).
+        with state.db() as c:
+            state.event(c, data.job_id, 'Audiobookshelf playlist: ' + ('already present' if already else 'book added'))
+        return {'message': message, 'already_in': already}
 
 
 @app.get('/api/jobs/{job_id}')

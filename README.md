@@ -64,6 +64,11 @@ Use the Settings templates to change it. Optional `year_prefix`, `year_suffix`, 
 
 Google Books can enforce an anonymous quota. If it reports a rate limit, use Open Library or add an optional Google Books API key in Settings. The key is stored and redacted like the other integration secrets.
 
+## Listen next with ABS playlists
+Published books offer **Add to playlist** directly in the queue and book detail. Configure `abs_url`, `abs_token`, and `abs_library_id` in Settings. Choose an existing ABS playlist or use **Create new playlist**, enter its name, then add this one book. Repeating an add reports **Already in** without adding another copy. The scan-after-finalization toggle controls automatic scans, not these explicit playlist actions.
+
+Funnel resolves the frozen publication folder against exact ABS item `path` or library-relative `relPath`, across all pages of the configured library. It never guesses using titles or authors; ambiguous paths are rejected. Publication plans without a successful output cannot be added. If ABS has not indexed the folder yet, the picker explains this: run a library scan in Audiobookshelf if needed and use **Retry lookup / refresh playlists**. Opening the queue does not contact ABS or start a scan. Existing finalization and scan retries are unchanged.
+
 ## Confidence and scheduling
 
 Base evidence weights: title 35, author 25, narrator 10, runtime 15, series 5, series number 5, ASIN/ISBN 5. Missing optional evidence earns no base points, but an Audible candidate with exact normalized title and author and runtime within both 1% and 120 seconds receives a **95-point score floor** when no edition evidence conflicts. The breakdown shows the base evidence and strong-match adjustment explicitly. This lets standalone books pass without series, narrator or identifier tags. Scores are rule-based evidence measures, not statistical probabilities.
