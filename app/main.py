@@ -103,12 +103,43 @@ def jobs():
 PLAYLISTS_CACHE_TTL_SECONDS = max(0, float(os.environ.get('PLAYLISTS_CACHE_TTL_SECONDS', '300')))
 _playlists_cache = {}
 _playlists_lock = threading.Lock()
+RESOLUTION_CACHE_TTL_SECONDS = max(0, float(os.environ.get('RESOLUTION_CACHE_TTL_SECONDS', '3600')))
+_resolution_cache = {}
+_resolution_lock = threading.Lock()
 
 
 def playlists_cache_key(settings):
     return hashlib.sha256(json.dumps([
         settings.abs_url.rstrip('/'), settings.abs_library_id, settings.abs_token,
     ]).encode()).digest()
+
+
+def resolution_cache_key(settings, job):
+    # Hash saved publication data only: no filesystem reads or content hashing.
+    identity = hashlib.sha256(json.dumps([
+        job['body'].get('publication'), job.get('output'),
+    ], sort_keys=True).encode()).digest()
+    return playlists_cache_key(settings), job['id'], identity
+
+
+def resolve_library_item(client, settings, job, refresh=False):
+    key = resolution_cache_key(settings, job)
+    # Coalesce cold lookups; a refresh discards even a previously successful result.
+    with _resolution_lock:
+        now = time.monotonic()
+        for stale in [k for k, (_, expires) in _resolution_cache.items() if expires <= now]:
+            del _resolution_cache[stale]
+        if refresh:
+            _resolution_cache.pop(key, None)
+        if key in _resolution_cache:
+            return _resolution_cache[key][0]
+        item_id = abs_api.resolve(client, settings, job)
+        # Only resolve's successful, unambiguous result is retained. Bound memory
+        # even when many books/settings/output identities change within one TTL.
+        if len(_resolution_cache) >= 512:
+            del _resolution_cache[next(iter(_resolution_cache))]
+        _resolution_cache[key] = (item_id, time.monotonic() + RESOLUTION_CACHE_TTL_SECONDS)
+        return item_id
 
 
 @app.get('/api/playlists')
@@ -145,10 +176,10 @@ def create_playlist(data: Playlist):
 
 
 @app.get('/api/jobs/{job_id}/library-item')
-def lookup_library_item(job_id: str):
+def lookup_library_item(job_id: str, refresh: bool = False):
     settings = state.settings()
     with abs_api.connection(settings) as client:
-        return {'libraryItemId': abs_api.resolve(client, settings, state.job(job_id))}
+        return {'libraryItemId': resolve_library_item(client, settings, state.job(job_id), refresh)}
 
 
 class PlaylistItem(BaseModel):
@@ -159,7 +190,7 @@ class PlaylistItem(BaseModel):
 def add_playlist_item(playlist_id: str, data: PlaylistItem):
     settings = state.settings()
     with abs_api.connection(settings) as client:
-        item_id = abs_api.resolve(client, settings, state.job(data.job_id))
+        item_id = resolve_library_item(client, settings, state.job(data.job_id))
         path = 'playlists/' + abs_api.identifier(playlist_id)
         playlist = abs_api.request(client, 'GET', path)
         if playlist['libraryId'] != settings.abs_library_id:

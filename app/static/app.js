@@ -384,7 +384,7 @@ async function showPlaylist(job) {
         if (data.playlists.some(p => p.id === previous)) $("#playlist-target").value = previous;
         $("#playlist-status").textContent = "Playlists loaded. Looking up published book in Audiobookshelf…";
       })(),
-      api(`/jobs/${encodeURIComponent(job.id)}/library-item`),
+      api(`/jobs/${encodeURIComponent(job.id)}/library-item` + (bypass ? "?refresh=1" : "")),
     ]);
     const failed = results.find(result => result.status === "rejected");
     if (failed) throw failed.reason;

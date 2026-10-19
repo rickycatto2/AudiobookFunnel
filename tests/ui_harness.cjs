@@ -131,7 +131,7 @@ const calls = [];
 let pendingPlaylists = null, pendingLookup = null;
 function route(method, url) {
   if (url.startsWith('/api/playlists')) return pendingPlaylists || { playlists: [{ id: 'p1', name: 'TBR' }] };
-  if (url.endsWith('/library-item')) return pendingLookup || { libraryItemId: 'book-id' };
+  if (url.split('?')[0].endsWith('/library-item')) return pendingLookup || { libraryItemId: 'book-id' };
   if (url === "/api/jobs" && method === "GET") return snapshot;
   if (url === "/api/health") return { runtime: { worker_heartbeat: 0 } };
   if (/^\/api\/jobs\/[^/]+$/.test(url)) return reviewJob;
@@ -248,6 +248,7 @@ const settle = () => new Promise((r) => setTimeout(r, 5));
   pendingPlaylists = pendingLookup = null;
   await element('#playlist-retry').onclick();
   check(calls.some(c => c.url === '/api/playlists?refresh=1'), 'retry explicitly bypasses the playlist cache');
+  check(calls.some(c => c.url.endsWith('/library-item?refresh=1')), 'retry explicitly bypasses the resolution cache');
   element('#playlist-close').onclick();
   check(!element('#playlist-dialog').open, 'dialog remains closable');
 

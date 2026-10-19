@@ -12,6 +12,7 @@ from app.main import app
 @pytest.fixture
 def abs_service(configured, monkeypatch):
     main._playlists_cache.clear()
+    main._resolution_cache.clear()
     settings = configured.model_copy(update={'abs_url': 'http://abs.test', 'abs_token': 'secret-test-token', 'abs_library_id': 'lib'})
     with state.db() as c:
         c.execute('UPDATE settings SET body=?', (settings.model_dump_json(),))
@@ -23,7 +24,7 @@ def abs_service(configured, monkeypatch):
     original = httpx.Client
     service = {'items': [{'id': 'book-id', 'libraryId': 'lib', 'path': '/different/Author/Book', 'relPath': 'Author/Book',
                           'media': {'metadata': {'title': 'Entirely different title'}}}],
-               'playlist': {'id': 'tbr', 'name': 'TBR', 'libraryId': 'lib', 'items': []}, 'adds': 0, 'fail': False}
+               'playlist': {'id': 'tbr', 'name': 'TBR', 'libraryId': 'lib', 'items': []}, 'adds': 0, 'scans': 0, 'fail': False}
 
     def handler(request):
         assert request.headers['Authorization'] == 'Bearer secret-test-token'
@@ -37,6 +38,8 @@ def abs_service(configured, monkeypatch):
                 return httpx.Response(200, json=dict(service['playlist'], name=data['name']))
             return httpx.Response(200, json=[service['playlist']])
         if path == '/api/libraries/lib/items':
+            assert request.url.params['minified'] == '1'
+            service['scans'] += 1
             return httpx.Response(200, json={'results': service['items'], 'total': len(service['items'])})
         if path == '/api/playlists/tbr':
             return httpx.Response(200, json=service['playlist'])
@@ -67,6 +70,7 @@ def test_add_exact_relative_path_and_idempotence(abs_service):
         assert response.json()['message'] == message
     assert service['adds'] == 1
     assert len(service['playlist']['items']) == 1
+    assert service['scans'] == 1
 
 
 @pytest.mark.parametrize('items', [[], [{'id': 'wrong', 'path': '/other/book', 'relPath': 'Other/Book',
@@ -85,7 +89,7 @@ def test_absolute_path_and_ambiguity(abs_service):
     service['items'] = [{'id': 'book-id', 'path': '/library/Author/Book'}]
     assert client.get('/api/jobs/job/library-item').status_code == 200
     service['items'].append({'id': 'other-id', 'relPath': 'Author/Book'})
-    response = client.get('/api/jobs/job/library-item')
+    response = client.get('/api/jobs/job/library-item?refresh=1')
     assert response.status_code == 409 and 'ambiguous' in response.text
 
 
@@ -188,3 +192,120 @@ def test_playlist_ui_contract():
     assert 'return Boolean(job.output && job.body.publication)' in js
     assert 'esc(p.id)' in js and 'esc(p.name)' in js
     assert 'value || !resolved' in js
+
+
+def test_resolution_cache_ttl_and_refresh(abs_service, monkeypatch):
+    client, service = abs_service
+    now = [100.0]
+    monkeypatch.setattr(main.time, 'monotonic', lambda: now[0])
+    monkeypatch.setattr(main, 'RESOLUTION_CACHE_TTL_SECONDS', 3600)
+    path = '/api/jobs/job/library-item'
+    assert client.get(path).status_code == 200
+    now[0] = 3699
+    assert client.get(path).status_code == 200
+    assert service['scans'] == 1
+    now[0] = 3700
+    assert client.get(path).status_code == 200
+    assert service['scans'] == 2
+    assert client.get(path + '?refresh=1').status_code == 200
+    assert service['scans'] == 3
+
+
+@pytest.mark.parametrize('ambiguous', [False, True])
+def test_unsuccessful_resolution_never_cached(abs_service, monkeypatch, ambiguous):
+    client, service = abs_service
+    now = [100.0]
+    monkeypatch.setattr(main.time, 'monotonic', lambda: now[0])
+    monkeypatch.setattr(main, 'RESOLUTION_CACHE_TTL_SECONDS', 10)
+    service['items'] = ([{'id': 'one', 'relPath': 'Author/Book'},
+                         {'id': 'two', 'path': '/library/Author/Book'}] if ambiguous else [])
+    for moment in (100, 101, 111):
+        now[0] = moment
+        response = client.get('/api/jobs/job/library-item')
+        assert response.status_code == 409
+        assert ('ambiguous' if ambiguous else 'Not yet in Audiobookshelf') in response.text
+        assert not main._resolution_cache
+    assert service['scans'] == 3
+    service['items'] = [{'id': 'book-id', 'relPath': 'Author/Book'}]
+    assert client.get('/api/jobs/job/library-item').status_code == 200
+    assert service['scans'] == 4
+
+
+def test_failed_refresh_discards_previous_success(abs_service):
+    client, service = abs_service
+    assert client.get('/api/jobs/job/library-item').status_code == 200
+    service['items'].append({'id': 'other', 'relPath': 'Author/Book'})
+    assert client.get('/api/jobs/job/library-item?refresh=1').status_code == 409
+    assert client.post('/api/playlists/tbr/items', json={'job_id': 'job'}).status_code == 409
+    assert service['scans'] == 3
+    assert not main._resolution_cache
+
+
+@pytest.mark.parametrize('field', ['output', 'relative', 'library_path', 'filename', 'publication'])
+def test_resolution_identity_invalidation(abs_service, field):
+    client, service = abs_service
+    assert client.get('/api/jobs/job/library-item').status_code == 200
+    job = state.job('job')
+    if field == 'output':
+        job['output'] = None
+    elif field == 'publication':
+        job['body'].pop('publication')
+    else:
+        job['body']['publication'][field] += '-changed'
+    with state.db() as c:
+        c.execute('UPDATE jobs SET body=?,output=? WHERE id=?',
+                  (json.dumps(job['body']), job['output'], 'job'))
+    response = client.get('/api/jobs/job/library-item')
+    if field in ('output', 'publication', 'relative'):
+        assert response.status_code == 409
+    else:
+        assert response.status_code == 200
+    assert service['scans'] == (1 if field in ('output', 'publication') else 2)
+
+
+def test_resolution_cache_key_is_private_and_isolated(abs_service):
+    import hashlib
+
+    settings = state.settings()
+    job = state.job('job')
+    key = main.resolution_cache_key(settings, job)
+    assert key[0] == main.playlists_cache_key(settings)
+    assert settings.abs_token not in repr(key)
+    assert hashlib.sha256(settings.abs_token.encode()).digest() not in key
+    assert hashlib.sha256(settings.abs_token.encode()).hexdigest() not in repr(key)
+    for field, value in [('abs_url', 'http://other.test'), ('abs_token', 'new-secret'), ('abs_library_id', 'other')]:
+        assert key != main.resolution_cache_key(settings.model_copy(update={field: value}), job)
+    assert key != main.resolution_cache_key(settings, dict(job, id='another-job'))
+
+
+def test_post_cold_resolution_populates_get_cache(abs_service):
+    client, service = abs_service
+    assert client.post('/api/playlists/tbr/items', json={'job_id': 'job'}).status_code == 200
+    assert client.get('/api/jobs/job/library-item').json() == {'libraryItemId': 'book-id'}
+    assert service['scans'] == 1
+
+
+@pytest.mark.parametrize('ambiguous', [False, True])
+def test_single_match_must_finish_scan_and_ambiguity_stops_early(abs_service, monkeypatch, ambiguous):
+    client, _ = abs_service
+    pages = []
+
+    def paginated(client, method, path, **kwargs):
+        assert kwargs['params']['minified'] == 1
+        page = kwargs['params']['page']
+        pages.append(page)
+        if page == 0:
+            rows = [{'id': 'book-id', 'relPath': 'Author/Book'}] * 200
+        elif page == 1:
+            rows = [{'id': 'other' if ambiguous else 'book-id', 'relPath': 'Author/Book'}] * 200
+        else:
+            rows = [{'id': 'wrong', 'libraryId': 'other-library', 'relPath': 'Author/Book'}]
+        return {'results': rows, 'total': 401}
+
+    monkeypatch.setattr(audiobookshelf, 'request', paginated)
+    response = client.get('/api/jobs/job/library-item')
+    assert response.status_code == (409 if ambiguous else 200)
+    assert pages == ([0, 1] if ambiguous else [0, 1, 2])
+    if ambiguous:
+        assert 'ambiguous' in response.text
+        assert not main._resolution_cache

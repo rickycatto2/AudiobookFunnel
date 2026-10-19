@@ -51,7 +51,9 @@ def resolve(client, settings, job):
     page = 0
     while True:
         result = request(client, 'GET', f'libraries/{identifier(settings.abs_library_id)}/items',
-                         params={'page': page, 'limit': 200, 'minified': 0})
+                         # ABS minified items retain id, libraryId, path and relPath;
+                         # resolution has no metadata/name-search fallback.
+                         params={'page': page, 'limit': 200, 'minified': 1})
         rows = result['results']
         for item in rows:
             if item.get('libraryId', settings.abs_library_id) != settings.abs_library_id:
@@ -59,11 +61,11 @@ def resolve(client, settings, job):
             if ((item.get('path') and normalized(item['path']) == absolute)
                     or (item.get('relPath') and normalized(item['relPath']) == relative)):
                 matches.add(item['id'])
+                if len(matches) >= 2:
+                    raise HTTPException(409, 'Published path is ambiguous in Audiobookshelf. Check the library folders before trying again.')
         if (page + 1) * 200 >= result['total'] or not rows:
             break
         page += 1
-    if len(matches) > 1:
-        raise HTTPException(409, 'Published path is ambiguous in Audiobookshelf. Check the library folders before trying again.')
     if not matches:
         raise HTTPException(409, 'Not yet in Audiobookshelf — try again after the library scan. Run a library scan in Audiobookshelf if needed, then retry lookup.')
     return matches.pop()
