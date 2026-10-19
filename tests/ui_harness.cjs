@@ -31,7 +31,7 @@ class Element {
     this.onclick = null;
     this.onsubmit = null;
   }
-  set innerHTML(v) { this._html = String(v); this._cache = {}; }
+  set innerHTML(v) { this.writes = (this.writes || 0) + 1; this._html = String(v); this._cache = {}; }
   get innerHTML() { return this._html; }
   // Parsed buttons are cached per rendered markup so that handlers wired by
   // the app stay reachable when the test queries the same selector again.
@@ -42,6 +42,9 @@ class Element {
   after() {}
   insertBefore() {}
   appendChild() {}
+  append() {}
+  showModal() { this.open = true; }
+  close() { this.open = false; }
   addEventListener() {}
   querySelector() { return element("child"); }
   querySelectorAll() { return []; }
@@ -74,7 +77,7 @@ function dataButtons(html, attr) {
 }
 
 const document = {
-  querySelector: (sel) => element(sel),
+  querySelector: (sel) => sel === 'dialog[open]' ? (element('#playlist-dialog').open ? element('#playlist-dialog') : null) : element(sel),
   querySelectorAll: (sel) => {
     const m = /^\[data-([a-z-]+)\]$/.exec(sel);
     if (!m) return [];
@@ -125,7 +128,10 @@ const readyJob = job("j2", "READY", "A Ready Book");
 const snapshot = { jobs: [reviewJob, readyJob], packages: [], scans: [] };
 
 const calls = [];
+let pendingPlaylists = null, pendingLookup = null;
 function route(method, url) {
+  if (url.startsWith('/api/playlists')) return pendingPlaylists || { playlists: [{ id: 'p1', name: 'TBR' }] };
+  if (url.endsWith('/library-item')) return pendingLookup || { libraryItemId: 'book-id' };
   if (url === "/api/jobs" && method === "GET") return snapshot;
   if (url === "/api/health") return { runtime: { worker_heartbeat: 0 } };
   if (/^\/api\/jobs\/[^/]+$/.test(url)) return reviewJob;
@@ -135,7 +141,7 @@ function route(method, url) {
 async function fetch(url, opts = {}) {
   const method = opts.method || "GET";
   calls.push({ method, url, body: opts.body ? JSON.parse(opts.body) : undefined });
-  const data = route(method, url);
+  const data = await route(method, url);
   return { ok: true, status: 200, json: async () => data };
 }
 
@@ -148,7 +154,7 @@ const sandbox = {
 };
 vm.createContext(sandbox);
 const source = fs.readFileSync(APP, "utf8");
-vm.runInContext(source + "\n;globalThis.__hooks = { drawQueue, detail, queue };", sandbox, { filename: "app.js" });
+vm.runInContext(source + "\n;globalThis.__hooks = { drawQueue, detail, queue, queuePollAllowed, queueFingerprint, showPlaylist };", sandbox, { filename: "app.js" });
 const hooks = sandbox.__hooks;
 const settle = () => new Promise((r) => setTimeout(r, 5));
 
@@ -200,9 +206,50 @@ const settle = () => new Promise((r) => setTimeout(r, 5));
     "top Save & approve reuses the existing approve endpoint without forcing an encode");
   check(approveCalls()[0].body.force_now !== true, "no implicit immediate processing override");
 
-  // 6. Returning to the queue still resets the viewport.
+  // 6. Polls compare rendered fields and preserve the viewport on real updates.
   await hooks.queue();
-  check(viewport.y === 0, "navigating back to the queue resets the scroll on purpose");
+  viewport.y = 900;
+  const writes = element('#books').writes;
+  await hooks.queue(true);
+  check(element('#books').writes === writes && viewport.y === 900, 'unchanged poll neither redraws nor scrolls');
+  readyJob.updated = 123;
+  await hooks.queue(true);
+  check(element('#books').writes === writes, 'unrendered timestamp changes do not redraw');
+  readyJob.status = 'PROCESSING';
+  await hooks.queue(true);
+  check(element('#books').writes === writes + 1 && viewport.y === 900, 'changed poll redraws and preserves scroll');
+  element('#playlist-dialog').open = true;
+  check(!hooks.queuePollAllowed(), 'timer skips an open playlist dialog');
+  readyJob.status = 'COMPLETE';
+  await hooks.queue(true);
+  check(element('#books').writes === writes + 1, 'in-flight poll cannot redraw under a dialog');
+  element('#playlist-dialog').open = false;
+  await hooks.detail('j1');
+  element('#metadata-form [name="title"]').value = 'Typing';
+  check(!hooks.queuePollAllowed(), 'timer skips metadata detail');
+  await hooks.queue(true);
+  check(!element('#detail').hidden && element('#metadata-form [name="title"]').value === 'Typing', 'in-flight poll leaves metadata edits alone');
+  await hooks.queue();
+  check(viewport.y === 0, 'navigating from detail to queue still starts at the top');
+
+  let finishPlaylists, finishLookup;
+  pendingPlaylists = new Promise(resolve => { finishPlaylists = resolve; });
+  pendingLookup = new Promise(resolve => { finishLookup = resolve; });
+  const opening = hooks.showPlaylist(reviewJob);
+  check(element('#playlist-dialog').open, 'cold-cache playlist dialog opens before requests finish');
+  check(element('#playlist-status').textContent.includes('Loading playlists'), 'cold-cache dialog shows an honest loading status');
+  check(calls.some(c => c.url.endsWith('/library-item')), 'book lookup starts without waiting for playlists');
+  finishPlaylists({ playlists: [{ id: 'p1', name: 'TBR' }] });
+  await settle();
+  check(element('#playlist-status').textContent.includes('Looking up published book'), 'slow library scan has a distinct status');
+  finishLookup({ libraryItemId: 'book-id' });
+  await opening;
+  check(element('#playlist-status').textContent === 'Book found. Choose a playlist.', 'dialog reports completion');
+  pendingPlaylists = pendingLookup = null;
+  await element('#playlist-retry').onclick();
+  check(calls.some(c => c.url === '/api/playlists?refresh=1'), 'retry explicitly bypasses the playlist cache');
+  element('#playlist-close').onclick();
+  check(!element('#playlist-dialog').open, 'dialog remains closable');
 
   console.log(failures ? `\n${failures} UI check(s) failed` : "\nall UI checks passed");
   process.exit(failures ? 1 : 0);

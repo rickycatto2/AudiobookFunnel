@@ -86,9 +86,23 @@ function image(url, cls = "") {
     ? `<img class="${cls}" src="${esc(url)}" alt="Book cover" referrerpolicy="no-referrer" loading="lazy">`
     : "";
 }
-async function queue() {
-  snapshot = await api("/jobs");
-  screen("queue");
+let queueDrawSnapshot = null, queuePolling = false;
+function queueFingerprint(data, filter) {
+  return JSON.stringify({ filter, jobs: data.jobs.map(j => [
+    j.id, j.status, j.body.metadata.title, j.body.metadata.author,
+    j.body.metadata.narrator, j.body.files.length, j.body.embedded.duration, published(j),
+  ]), packages: data.packages.map(p => [p.id, p.status, p.source, p.error]),
+  scans: data.scans.map(s => [s.status, s.error]) });
+}
+function queuePollAllowed() {
+  return !$("#queue").hidden && !document.querySelector("dialog[open]");
+}
+async function queue(poll = false) {
+  const data = await api("/jobs");
+  // A request may finish after the user navigated away or opened a dialog.
+  if (poll && !queuePollAllowed()) return;
+  snapshot = data;
+  if (!poll && $("#queue").hidden) screen("queue");
   drawQueue();
   const h = await api("/health");
   const heartbeat = Number(h.runtime.worker_heartbeat || 0);
@@ -102,6 +116,10 @@ async function queue() {
     notice(errors.map(([k, v]) => label(k) + ": " + v).join(" · "));
 }
 function drawQueue() {
+  const fingerprint = queueFingerprint(snapshot, $("#filter").value);
+  if (fingerprint === queueDrawSnapshot) return;
+  const scrollY = window.scrollY;
+  queueDrawSnapshot = fingerprint;
   const states = ["REVIEW", "READY", "PROCESSING", "COMPLETE", "ALREADY_EXISTS", "DUPLICATE_CONFIRMED", "ERROR"];
   const titles = { REVIEW: "Needs review", READY: "Ready / scheduled", PROCESSING: "Processing", COMPLETE: "In your library", ALREADY_EXISTS: "Already exists", DUPLICATE_CONFIRMED: "Confirmed duplicates", ERROR: "Needs attention" };
   $("#counts").innerHTML = states
@@ -165,6 +183,7 @@ function drawQueue() {
   });
   if ($("#empty-settings"))
     $("#empty-settings").onclick = () => act(showSettings);
+  window.scrollTo(0, scrollY);
 }
 async function detail(id) {
   // Re-rendering the book already on screen (candidate selection, search,
@@ -353,19 +372,27 @@ async function showPlaylist(job) {
     catch (e) { $("#playlist-status").textContent = e.message; }
     finally { disabled(false); }
   }
-  async function refresh() {
+  async function refresh(bypass = false) {
     resolved = false;
-    $("#playlist-status").textContent = "Looking up published book in Audiobookshelf…";
+    $("#playlist-status").textContent = "Loading playlists… Looking up published book…";
     const previous = $("#playlist-target").value;
-    const data = await api("/playlists");
-    $("#playlist-target").innerHTML = data.playlists.map(p => `<option value="${esc(p.id)}">${esc(p.name)}</option>`).join("");
-    if (data.playlists.some(p => p.id === previous)) $("#playlist-target").value = previous;
-    await api(`/jobs/${encodeURIComponent(job.id)}/library-item`);
+    let data;
+    const results = await Promise.allSettled([
+      (async () => {
+        data = await api("/playlists" + (bypass ? "?refresh=1" : ""));
+        $("#playlist-target").innerHTML = data.playlists.map(p => `<option value="${esc(p.id)}">${esc(p.name)}</option>`).join("");
+        if (data.playlists.some(p => p.id === previous)) $("#playlist-target").value = previous;
+        $("#playlist-status").textContent = "Playlists loaded. Looking up published book in Audiobookshelf…";
+      })(),
+      api(`/jobs/${encodeURIComponent(job.id)}/library-item`),
+    ]);
+    const failed = results.find(result => result.status === "rejected");
+    if (failed) throw failed.reason;
     resolved = true;
     $("#playlist-status").textContent = data.playlists.length ? "Book found. Choose a playlist." : "Book found. Create your first playlist below.";
   }
   $("#playlist-target").onchange = () => disabled(false);
-  $("#playlist-retry").onclick = () => run(refresh);
+  $("#playlist-retry").onclick = () => run(() => refresh(true));
   $("#playlist-close").onclick = () => dialog.close();
   $("#playlist-create").onclick = () => run(async () => {
     const name = $("#playlist-name").value.trim();
@@ -565,7 +592,11 @@ $("#discover").onclick = () =>
   });
 act(queue);
 setInterval(() => {
-  if (!$("#queue").hidden) act(queue);
+  if (!queuePolling && queuePollAllowed()) act(async () => {
+    queuePolling = true;
+    try { await queue(true); }
+    finally { queuePolling = false; }
+  });
 }, 15000);
 
 async function showArchives() {

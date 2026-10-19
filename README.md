@@ -67,6 +67,8 @@ Google Books can enforce an anonymous quota. If it reports a rate limit, use Ope
 ## Listen next with ABS playlists
 Published books offer **Add to playlist** directly in the queue and book detail. Configure `abs_url`, `abs_token`, and `abs_library_id` in Settings. Choose an existing ABS playlist or use **Create new playlist**, enter its name, then add this one book. Repeating an add reports **Already in** without adding another copy. The scan-after-finalization toggle controls automatic scans, not these explicit playlist actions.
 
+Playlist lists are cached in the web process for 300 seconds. Set `PLAYLISTS_CACHE_TTL_SECONDS` in the web environment (or Compose `.env`) to change this; `0` disables caching. **Retry lookup / refresh playlists** bypasses the cache, and creating a playlist invalidates it. The dialog opens immediately with loading status while playlists and the full-library book lookup run in parallel. Cache entries are isolated by ABS address, library and credentials, and are discarded on web restart.
+
 Funnel resolves the frozen publication folder against exact ABS item `path` or library-relative `relPath`, across all pages of the configured library. It never guesses using titles or authors; ambiguous paths are rejected. Publication plans without a successful output cannot be added. If ABS has not indexed the folder yet, the picker explains this: run a library scan in Audiobookshelf if needed and use **Retry lookup / refresh playlists**. Opening the queue does not contact ABS or start a scan. Existing finalization and scan retries are unchanged.
 
 ## Confidence and scheduling

@@ -1,7 +1,10 @@
-import json
 import base64
 import binascii
+import hashlib
 import http.client
+import json
+import os
+import threading
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -96,10 +99,32 @@ def jobs():
                 'scans': [dict(r) for r in c.execute('SELECT * FROM scan_requests ORDER BY id DESC LIMIT 10')]}
 
 
+# One bounded, process-local entry; never retain a plaintext credential in the key.
+PLAYLISTS_CACHE_TTL_SECONDS = max(0, float(os.environ.get('PLAYLISTS_CACHE_TTL_SECONDS', '300')))
+_playlists_cache = {}
+_playlists_lock = threading.Lock()
+
+
+def playlists_cache_key(settings):
+    return hashlib.sha256(json.dumps([
+        settings.abs_url.rstrip('/'), settings.abs_library_id, settings.abs_token,
+    ]).encode()).digest()
+
+
 @app.get('/api/playlists')
-def list_playlists():
-    with abs_api.connection(state.settings()) as client:
-        return {'playlists': abs_api.playlists(client)}
+def list_playlists(refresh: bool = False):
+    settings = state.settings()
+    key = playlists_cache_key(settings)
+    # Coalesce concurrent cold requests; exceptions never populate the cache.
+    with _playlists_lock:
+        if (not refresh and _playlists_cache.get('key') == key
+                and time.monotonic() < _playlists_cache['expires']):
+            return {'playlists': _playlists_cache['rows']}
+        with abs_api.connection(settings) as client:
+            rows = abs_api.playlists(client)
+        _playlists_cache.update(key=key, rows=rows,
+                                expires=time.monotonic() + PLAYLISTS_CACHE_TTL_SECONDS)
+        return {'playlists': rows}
 
 
 class Playlist(BaseModel):
@@ -114,7 +139,9 @@ def create_playlist(data: Playlist):
     settings = state.settings()
     with abs_api.connection(settings) as client:
         row = abs_api.request(client, 'POST', 'playlists', json={'name': name, 'libraryId': settings.abs_library_id, 'items': []})
-        return {'id': row['id'], 'name': row['name']}
+    with _playlists_lock:
+        _playlists_cache.clear()
+    return {'id': row['id'], 'name': row['name']}
 
 
 @app.get('/api/jobs/{job_id}/library-item')

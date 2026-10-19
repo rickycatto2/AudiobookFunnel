@@ -24,6 +24,10 @@ x-common: &common
 services:
   web:
     <<: *common
+    environment:
+      AF_DATA: /config
+      TZ: America/Chicago
+      PLAYLISTS_CACHE_TTL_SECONDS: ${PLAYLISTS_CACHE_TTL_SECONDS:-300}
     ports:
       - "127.0.0.1:8095:8095"
     healthcheck:

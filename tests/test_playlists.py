@@ -5,12 +5,13 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from app import audiobookshelf, state
+from app import audiobookshelf, main, state
 from app.main import app
 
 
 @pytest.fixture
 def abs_service(configured, monkeypatch):
+    main._playlists_cache.clear()
     settings = configured.model_copy(update={'abs_url': 'http://abs.test', 'abs_token': 'secret-test-token', 'abs_library_id': 'lib'})
     with state.db() as c:
         c.execute('UPDATE settings SET body=?', (settings.model_dump_json(),))
@@ -136,6 +137,45 @@ def test_lookup_checks_later_pages(abs_service, monkeypatch):
     monkeypatch.setattr(audiobookshelf, 'request', paginated)
     assert client.get('/api/jobs/job/library-item').json() == {'libraryItemId': 'book-id'}
     assert pages == [0, 1]
+
+
+def test_playlist_cache_ttl_and_bypass(abs_service, monkeypatch):
+    client, _ = abs_service
+    now = [100.0]
+    monkeypatch.setattr(main.time, 'monotonic', lambda: now[0])
+    monkeypatch.setattr(main, 'PLAYLISTS_CACHE_TTL_SECONDS', 300)
+    calls = []
+    def fetch(client):
+        calls.append(True)
+        return [{'id': 'tbr', 'name': str(len(calls))}]
+    monkeypatch.setattr(audiobookshelf, 'playlists', fetch)
+    assert client.get('/api/playlists').json()['playlists'][0]['name'] == '1'
+    now[0] = 399
+    assert client.get('/api/playlists').json()['playlists'][0]['name'] == '1'
+    assert len(calls) == 1
+    now[0] = 400
+    assert client.get('/api/playlists').json()['playlists'][0]['name'] == '2'
+    assert client.get('/api/playlists?refresh=1').json()['playlists'][0]['name'] == '3'
+    assert len(calls) == 3
+
+
+def test_playlist_cache_key_isolates_credentials_and_library(configured):
+    settings = configured.model_copy(update={'abs_url': 'http://abs.test/', 'abs_token': 'secret-test-token', 'abs_library_id': 'lib'})
+    key = main.playlists_cache_key(settings)
+    assert b'secret-test-token' not in key
+    assert key == main.playlists_cache_key(settings.model_copy(update={'abs_url': 'http://abs.test'}))
+    for field, value in [('abs_url', 'http://other.test'), ('abs_token', 'new-secret'), ('abs_library_id', 'other')]:
+        assert key != main.playlists_cache_key(settings.model_copy(update={field: value}))
+
+
+def test_create_invalidates_playlist_cache(abs_service):
+    client, service = abs_service
+    client.get('/api/playlists')
+    assert main._playlists_cache
+    assert client.post('/api/playlists', json={'name': 'New'}).status_code == 200
+    assert not main._playlists_cache
+    service['playlist']['name'] = 'New'
+    assert client.get('/api/playlists').json()['playlists'][0]['name'] == 'New'
 
 
 def test_playlist_ui_contract():
