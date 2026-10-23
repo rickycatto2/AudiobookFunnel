@@ -19,9 +19,17 @@ New automatic approvals retain the selected provider edition and recheck the
 actual metadata before processing and after any source-runtime correction. Failed
 rechecks return to REVIEW without new publication. Existing live jobs are not
 migrated or rewritten. Explicitly retained manual fields and Save & approve are
-human overrides, not automatic correctness claims. The web approval action asks
-for confirmation when selected provenance is absent, weak, conflicted, or edited;
-manual API approval remains available and is not blocked permanently.
+human overrides, not automatic correctness claims. The web review displays inline
+warnings when selected provenance is absent, weak, conflicted, or edited, and
+refreshes them after saving. Save & approve is a single-click manual action with
+no blocking warning popup; backend automatic matching gates are unchanged.
+
+Manual Audible book URLs use their allowlisted marketplace, retained as selected
+edition provenance. Approval warnings compare that explicit lookup region rather
+than falsely reporting a Settings-region mismatch. Raw ASINs and title searches
+still use Settings. Automatic matching always requires the Settings region, even
+for a candidate manually retrieved from another marketplace. See
+[marketplace lookup notes](audible-marketplaces.md).
 
 Explicit terminal `- translator` contributor labels are excluded from Audible
 authors; unlabeled people/coauthors and ambiguous roles remain intact. Output

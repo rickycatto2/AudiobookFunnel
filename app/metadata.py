@@ -7,6 +7,7 @@ import httpx
 
 FIELDS = ['title', 'author', 'narrator', 'year', 'series', 'series_number', 'genre', 'description', 'publisher', 'copyright', 'isbn', 'asin', 'language', 'cover_url']
 DEFAULT_IGNORED_TITLE_TERMS = ['unabridged', 'abridged', 'full cast', 'full-cast', 'dramatized adaptation', 'dramatised adaptation']
+AUDIBLE_REGIONS = frozenset({'com', 'co.uk', 'com.au', 'ca', 'de', 'fr', 'it', 'es', 'co.jp', 'in'})
 
 
 def clean_title(value, terms=None):
@@ -40,16 +41,27 @@ def plain(text):
 
 
 def asin_from(value):
+    return audible_lookup(value)[0]
+
+
+def audible_lookup(value, default_region='com'):
+    """Parse a direct identifier or allowlisted book URL, never query/redirect data."""
     value = value.strip()
+    if default_region not in AUDIBLE_REGIONS:
+        raise ValueError('Unsupported Audible region')
     if re.fullmatch(r'[A-Za-z0-9]{10}', value):
-        return value.upper()
-    url = urlparse(value)
-    if url.scheme not in ('http', 'https') or not re.fullmatch(r'(?:www\.)?audible\.(?:com|co\.uk|com\.au|ca|de|fr|it|es|co\.jp|in)', url.hostname or ''):
+        return value.upper(), default_region, False
+    if re.search(r'[\x00-\x20\\]', value):
         raise ValueError('Paste an ASIN or an Audible book URL')
-    matches = re.findall(r'(?:/)([A-Za-z0-9]{10})(?=/|$)', url.path)
-    if not matches:
-        raise ValueError('No ASIN found in Audible URL')
-    return matches[-1].upper()
+    url = urlparse(value)
+    hosts = {prefix + 'audible.' + region: region for region in AUDIBLE_REGIONS for prefix in ('', 'www.')}
+    region = hosts.get(url.netloc.lower())
+    if url.scheme not in ('http', 'https') or not region:
+        raise ValueError('Paste an ASIN or an Audible book URL')
+    match = re.fullmatch(r'/pd/(?:[^/%\\\s]+/)?([A-Za-z0-9]{10})/?', url.path)
+    if not match or any(part in ('.', '..') for part in url.path.split('/')):
+        raise ValueError('No ASIN found in a supported Audible book URL path')
+    return match[1].upper(), region, True
 
 
 def similarity(a, b):
@@ -254,14 +266,28 @@ def search(provider, query, author='', region='com', asin='', google_key='', ign
     query = clean_title(query, ignored_title_terms)
     with httpx.Client(timeout=25, follow_redirects=True) as client:
         if provider == 'Audible':
+            explicit_region = False
+            if asin:
+                asin, region, explicit_region = audible_lookup(asin, region)
+            if region not in AUDIBLE_REGIONS:
+                raise ValueError('Unsupported Audible region')
             params = {'response_groups': 'category_ladders,contributors,media,product_desc,product_extended_attrs,product_attrs,series,product_details', 'image_sizes': '500,1000,2400'}
             base = f'https://api.audible.{region}/1.0/catalog/products'
             if asin:
-                response = client.get(base + '/' + asin_from(asin), params=params)
+                response = client.get(base + '/' + asin, params=params, follow_redirects=False)
+                unavailable = f'Audible returned no usable product metadata for ASIN {asin} in region {region.upper()}; try the Audible URL for another marketplace.'
+                if response.status_code == 404:
+                    raise ValueError(unavailable)
                 response.raise_for_status()
-                return [audible_product(response.json()['product'], region)]
+                product = response.json().get('product')
+                if not isinstance(product, dict) or not isinstance(product.get('title'), str) or not plain(product['title']).strip():
+                    raise ValueError(unavailable)
+                candidate = audible_product(product, region)
+                if explicit_region:
+                    candidate.update(region_source='audible_url', lookup_region=region)
+                return [candidate]
             params.update({'title': query, 'author': author, 'num_results': 8, 'products_sort_by': 'Relevance'})
-            response = client.get(base, params=params)
+            response = client.get(base, params=params, follow_redirects=False)
             response.raise_for_status()
             return [audible_product(p, region) for p in response.json().get('products', [])]
         if provider == 'Google Books':
@@ -304,7 +330,10 @@ def approval_warnings(body, settings):
     warnings = []
     if scoring['conflict']:
         warnings.append('Edition conflicts: ' + ', '.join(scoring['conflicts']))
-    if not scoring['strong_match'] or selected.get('region') != settings.audible_region:
+    expected_region = (selected.get('lookup_region') if selected.get('region_source') == 'audible_url'
+                       else settings.audible_region)
+    region_matches = expected_region in AUDIBLE_REGIONS and selected.get('region') == expected_region
+    if not scoring['strong_match'] or not region_matches:
         warnings.append('Insufficient exact source/edition/region evidence. Check the audio and provider edition yourself; do not infer language from the filename.')
     changed = [k for k in ('title', 'author', 'asin', 'isbn', 'language') if str(body['metadata'].get(k) or '') != str(selected.get(k) or '')]
     if changed:

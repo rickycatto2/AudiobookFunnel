@@ -40,12 +40,16 @@ class Element {
     return this._cache[attr] || (this._cache[attr] = dataButtons(this._html, attr));
   }
   after() {}
-  insertBefore() {}
+  insertBefore(child, before) {
+    if (child.id) registry.set('#' + child.id, child);
+    (this.insertions ||= []).push({ child, before });
+  }
   appendChild() {}
   append() {}
   showModal() { this.open = true; }
   close() { this.open = false; }
   addEventListener() {}
+  setAttribute(name, value) { this[name] = value; }
   querySelector() { return element("child"); }
   querySelectorAll() { return []; }
   focus() { viewport.focus.push(this.key); }
@@ -106,6 +110,7 @@ const job = (id, status, title) => ({
   id, package_id: "pkg-1", status, error: "", output: "",
   events: [{ created: 1700000000, message: "Inspected" }],
   automation: { eligible: false, reasons: ["Grouping is not confirmed yet"] },
+  approval_warnings: ['Edition conflicts: language <check> & runtime'],
   body: {
     metadata: { ...metadata, title },
     provenance,
@@ -134,6 +139,7 @@ function route(method, url) {
   if (url.split('?')[0].endsWith('/library-item')) return pendingLookup || { libraryItemId: 'book-id' };
   if (url === "/api/jobs" && method === "GET") return snapshot;
   if (url === "/api/health") return { runtime: { worker_heartbeat: 0 } };
+  if (url === "/api/archives") return { enabled: true, items: [{ hash: 'archive-id', name: 'Fixture', status: 'ARCHIVED', body: {} }] };
   if (/^\/api\/jobs\/[^/]+$/.test(url)) return reviewJob;
   if (/^\/api\/jobs\/j1\/select$/.test(url)) return reviewJob;
   return {};
@@ -154,7 +160,7 @@ const sandbox = {
 };
 vm.createContext(sandbox);
 const source = fs.readFileSync(APP, "utf8");
-vm.runInContext(source + "\n;globalThis.__hooks = { drawQueue, detail, queue, queuePollAllowed, queueFingerprint, showPlaylist };", sandbox, { filename: "app.js" });
+vm.runInContext(source + "\n;globalThis.__hooks = { drawQueue, detail, queue, queuePollAllowed, queueFingerprint, showPlaylist, save, reviewManualFields, showArchives };", sandbox, { filename: "app.js" });
 const hooks = sandbox.__hooks;
 const settle = () => new Promise((r) => setTimeout(r, 5));
 
@@ -187,6 +193,11 @@ const settle = () => new Promise((r) => setTimeout(r, 5));
   await hooks.detail("j1");
   check(element("#detail").innerHTML.includes('id="approve-top"'), "review detail offers a top-level Save & approve button");
   check(viewport.y === 0, "opening a book from the queue scrolls to the top on purpose");
+  check(!element('#approval-warnings').hidden && element('#approval-warnings').innerHTML.includes('language &lt;check&gt; &amp; runtime'), 'GET review warnings are visible inline and escaped');
+  check(element('#detail').insertions.some(i => i.child.id === 'approval-warnings' && i.before.key === '#detail .actions'), 'warning panel is next to Save & approve controls');
+  reviewJob.approval_warnings = ['Updated warning after save'];
+  await hooks.save();
+  check(element('#approval-warnings').innerHTML.includes('Updated warning after save'), 'save refreshes inline approval warnings');
 
   // 4. Choosing a candidate keeps the reader near their place.
   const candidate = document.querySelectorAll("[data-candidate]")[0];
@@ -205,6 +216,12 @@ const settle = () => new Promise((r) => setTimeout(r, 5));
   check(approveCalls().length === 1 && approveCalls()[0].body.force_now === false,
     "top Save & approve reuses the existing approve endpoint without forcing an encode");
   check(approveCalls()[0].body.force_now !== true, "no implicit immediate processing override");
+  check(!element('#notice').textContent.includes('unexpected confirm'), 'Save & approve with warnings never calls confirm');
+  reviewJob.approval_warnings = [];
+  await hooks.detail('j1');
+  check(element('#approval-warnings').hidden, 'empty warning panel is hidden');
+  await element('#approve').onclick();
+  check(approveCalls().length === 2, 'lower Save & approve also posts without confirmation');
 
   // 6. Polls compare rendered fields and preserve the viewport on real updates.
   await hooks.queue();
@@ -251,6 +268,20 @@ const settle = () => new Promise((r) => setTimeout(r, 5));
   check(calls.some(c => c.url.endsWith('/library-item?refresh=1')), 'retry explicitly bypasses the resolution cache');
   element('#playlist-close').onclick();
   check(!element('#playlist-dialog').open, 'dialog remains closable');
+
+  const confirmations = [];
+  sandbox.confirm = message => { confirmations.push(message); return false; };
+  hooks.reviewManualFields({provenance: {asin: 'Manual'}, metadata: {asin: 'B0FM6GST96'}});
+  check(confirmations.at(-1).includes('Keep your manual asin'), 'manual-field override confirmation remains');
+  reviewJob.status = 'ALREADY_EXISTS';
+  await hooks.detail('j1');
+  await element('#confirm-duplicate').onclick();
+  check(confirmations.at(-1).includes('existing library recording'), 'duplicate confirmation remains');
+  check(!calls.some(c => c.url.endsWith('/confirm-duplicate')), 'canceling duplicate confirmation prevents action');
+  await hooks.showArchives();
+  await document.querySelectorAll('[data-clear]')[0].onclick();
+  check(confirmations.at(-1).includes('Permanently delete'), 'archive deletion confirmation remains');
+  check(!calls.some(c => c.url.endsWith('/clear')), 'canceling archive deletion prevents action');
 
   console.log(failures ? `\n${failures} UI check(s) failed` : "\nall UI checks passed");
   process.exit(failures ? 1 : 0);

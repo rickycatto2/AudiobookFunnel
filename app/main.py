@@ -278,7 +278,7 @@ def edit(job_id: str, data: Edit):
         body['cover_choice'] = data.cover_choice
         body['grouping_confirmed'] = data.grouping_confirmed
     saved = edit_transaction(job_id, change)
-    # Save responses feed the publish confirmation; carry the same warnings as GET.
+    # Refresh the inline review warnings after saving; carry the same warnings as GET.
     saved['approval_warnings'] = metadata.approval_warnings(saved['body'], state.settings())
     return saved
 
